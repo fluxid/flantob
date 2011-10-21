@@ -1,5 +1,6 @@
 #coding:utf8
 
+import math
 import random
 
 from .map import Map
@@ -24,11 +25,15 @@ class Game:
         self.spawnradius2 = None
         self.player_seed = None
 
-        self.map_ = None
+        self.water_map = None
+        self.seen_map = None
+        self.visible_map = None
+        self.vision_map = None
 
         self.turn = 0
+        self.mx = 0
 
-        self.my_hills = dict()
+        self.my_hills = set()
         self.my_ants = dict()
 
         self.food = set()
@@ -38,10 +43,21 @@ class Game:
         self.enemy_ants = set()
 
         self.received_ants = set()
+        self.received_my_hills = set()
+        self.received_enemy_hills = set()
+        self.received_food = set()
 
     def init(self):
         random.seed(self.player_seed)
-        self.map_ = Map(self.rows, self.cols)
+        self.water_map = Map(self.rows, self.cols)
+        self.seen_map = Map(self.rows, self.cols)
+        
+        mx = self.mx = int(math.sqrt(self.viewradius2))
+        self.vision_map = Map(mx*2+1, mx*2+1)
+        for row in range(-mx, mx+1):
+            for col in range(-mx, mx+1):
+                if row**2 + col**2 <= self.viewradius2:
+                    self.vision_map.set(row+mx, col+mx)
 
     def clear_temporary_state(self):
         pass
@@ -55,13 +71,38 @@ class Game:
         my_ants = set(self.my_ants)
         dead_ants = my_ants - self.received_ants
         for ant in dead_ants:
-            err('deleting', ant)
+            err('deleting ant', ant)
             self.my_ants[ant].delete()
 
         new_ants = self.received_ants - my_ants
         for row, col in new_ants:
-            err('inserting', (row, col))
+            err('inserting ant', (row, col))
             Ant(self, row, col)
+
+        self.visible_map = Map(self.rows, self.cols)
+        for ant in self.my_ants.values():
+            row, col = ant.row-self.mx, ant.col-self.mx
+            self.visible_map.or_with_offset(self.vision_map, row, col)
+        self.seen_map.or_with(self.visible_map)
+
+        invisible = self.my_hills - self.received_my_hills
+        for pos in invisible:
+            if pos in self.visible_map:
+                self.my_hills.remove(pos)
+        self.my_hills.update(self.received_my_hills)
+
+        invisible = self.enemy_hills - self.received_enemy_hills
+        for pos in invisible:
+            if pos in self.visible_map:
+                self.enemy_hills.remove(pos)
+        self.enemy_hills.update(self.received_enemy_hills)
+
+        invisible = self.food - self.received_food
+        for pos in invisible:
+            if pos in self.visible_map:
+                err('removing food', pos)
+                self.food.remove(pos)
+        self.food.update(self.received_food)
 
         for ant in self.my_ants.values():
             move = ant.make_turn()
@@ -77,22 +118,24 @@ class Game:
             ant.finish_turn()
 
         self.received_ants.clear()
+        self.received_enemy_hills.clear()
+        self.received_my_hills.clear()
+        self.received_food.clear()
         self.occupied.clear()
         self.enemy_ants.clear()
-        self.food.clear()
 
     def set_water(self, row, col):
-        self.map_.set_water(row, col)
+        self.water_map.set(row, col)
 
     def set_food(self, row, col):
-        self.food.add((row, col))
+        self.received_food.add((row, col))
 
     def set_hill(self, row, col, owner):
         t = (row, col)
         if owner:
-            self.enemy_hill.add(t)
+            self.received_enemy_hills.add(t)
         else:
-            self.my_hills[t] = True # TODO
+            self.received_my_hills.add(t)
 
     def set_ant(self, row, col, owner):
         t = (row, col)
@@ -113,11 +156,11 @@ class Game:
         else:
             t = (row, col)
             
-        return (
-            self.map_.can_enter(row, col) and
-            t not in self.occupied and
-            t not in self.my_hills and
-            t not in self.food
+        return not (
+            self.water_map.get(row, col) or
+            t in self.occupied or
+            t in self.my_hills or
+            t in self.food
         )
 
     def translate(self, direction, row, col=None):
