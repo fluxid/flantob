@@ -4,7 +4,11 @@ import math
 import random
 
 from .map import Map
-from .ants import Ant
+from .ants import (
+    Ant,
+    ExplorerStrategy,
+    RandomStrategy,
+)
 
 DIR_N2C = {
     0:'n',
@@ -47,6 +51,11 @@ class Game:
         self.received_enemy_hills = set()
         self.received_food = set()
 
+        self.strategies = [
+            (1, RandomStrategy(self)),
+            (20, ExplorerStrategy(self)),
+        ]
+
     def init(self):
         random.seed(self.player_seed)
         self.water_map = Map(self.rows, self.cols)
@@ -84,6 +93,9 @@ class Game:
             row, col = ant.row-self.mx, ant.col-self.mx
             self.visible_map.or_with_offset(self.vision_map, row, col)
         self.seen_map.or_with(self.visible_map)
+
+        #for stride in self.seen_map.strides:
+        #    err(''.join(('#' if not cell else '.') for cell in stride))
 
         invisible = self.my_hills - self.received_my_hills
         for pos in invisible:
@@ -200,4 +212,22 @@ class Game:
         # Fuckup warning: we may loose ant or collide it with other...
         direction = random.randint(0, 3)
         return direction, self.translate(direction, row, col)
+
+    def choose_strategy(self, except_=None):
+        if except_:
+            strategies = [
+                (x, y)
+                for x, y in self.strategies
+                if not isinstance(y, except_)
+            ]
+        else:
+            strategies = self.strategies
+
+        s = float(sum(x for x, y in strategies))
+        c = random.random()
+        i = 0
+        for x, y in strategies:
+            i += x/s
+            if c <= i:
+                return y
 
