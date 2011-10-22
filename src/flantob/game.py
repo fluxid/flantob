@@ -8,6 +8,8 @@ from .ants import (
     Ant,
     ExplorerStrategy,
     RandomStrategy,
+    FoodStrategy,
+    HillStrategy,
 )
 
 DIR_N2C = {
@@ -50,10 +52,20 @@ class Game:
         self.received_my_hills = set()
         self.received_enemy_hills = set()
         self.received_food = set()
+    
+        random_ = RandomStrategy(self)
+        explorer = ExplorerStrategy(self)
+        hill_explo = HillStrategy(self, backup = explorer, refresh = 4)
+        food_short = FoodStrategy(self, backup = hill_explo, limit = 10, refresh = 2)
+        food_long = FoodStrategy(self, backup = explorer, limit = 50, refresh = 3)
+        hill_food = HillStrategy(self, backup = food_long, refresh = 4)
 
         self.strategies = [
-            (1, RandomStrategy(self)),
-            (20, ExplorerStrategy(self)),
+            (1, random_),
+            (2, explorer),
+            (4, hill_explo),
+            (9, food_short),
+            (5, hill_food),
         ]
 
     def init(self):

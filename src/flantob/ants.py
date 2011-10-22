@@ -20,13 +20,64 @@ class RandomStrategy(Strategy):
         direction, pos = self.game.random_translate(row, col)
         ant.move(direction, pos)
 
-class ExplorerStrategy(Strategy):
-    def __init__(self, game, *args, **kwargs):
+class DirectedStrategy(Strategy):
+    def __init__(self, game, backup = None, limit = None, refresh = None, *args, **kwargs):
         super().__init__(game, *args, **kwargs)
         self.last_gen = game.turn
-        self.backup_strategy = RandomStrategy(game)
+        self.backup_strategy = backup or RandomStrategy(game)
         self.direction_map = None
+        self.limit = limit
+        self.refresh = refresh or self.game.mx
 
+    def prefill(self):
+        raise NotImplementedError
+
+    def orinit(self):
+        raise NotImplementedError
+
+    def instruct_ant(self, ant):
+        if not self.direction_map or (self.game.turn - self.last_gen > self.refresh):
+            self.last_gen = self.game.turn
+            #with timer('MAPAAAA'):
+            self.direction_map = DirectionMap(self.game, self.prefill(), init = self.orinit(), limit = self.limit)
+            if not self.direction_map.ready:
+                self.backup_strategy.instruct_ant(ant)
+                return
+        elif not self.direction_map.ready:
+            self.direction_map.resume()
+            self.backup_strategy.instruct_ant(ant)
+            return
+
+        row, col = ant.row, ant.col
+        value = self.direction_map.get_pos((row, col))
+        #if value == -2:
+        #    self.backup_strategy.instruct_ant(ant)
+        #    return
+
+        translated = [
+            (a + (random.random()*1.5-0.75), b, c)
+            for a, b, c in (
+                (self.direction_map.get_pos(j), i, j)
+                for i, j in (
+                    (k, self.game.translate(k, row, col))
+                    for k in range(4)
+                )
+                if self.game.can_enter(j)
+            )
+            if a >= 0
+        ]
+        if not translated:
+            self.backup_strategy.instruct_ant(ant)
+            return
+        random.shuffle(translated)
+        translated.sort()
+        value, direction, pos = translated[0]
+        #if value == -1:
+        #    self.backup_strategy.instruct_ant(ant)
+        #    return
+        ant.move(direction, pos)
+
+class ExplorerStrategy(DirectedStrategy):
     def prefill(self):
         strides = self.game.seen_map.strides
         last_stride = strides[-1]
@@ -55,35 +106,31 @@ class ExplorerStrategy(Strategy):
             for row1, row2 in zip(self.game.seen_map.strides, self.game.water_map.strides)
         )
 
-    def instruct_ant(self, ant):
-        if not self.direction_map or (self.game.turn - self.last_gen > self.game.mx):
-            self.last_gen = self.game.turn
-            #with timer('MAPAAAA'):
-            self.direction_map = DirectionMap(self.game, self.prefill(), init = self.orinit())
-            if not self.direction_map.ready:
-                self.backup_strategy.instruct_ant(ant)
-                return
-        elif not self.direction_map.ready:
-            self.direction_map.resume()
-            self.backup_strategy.instruct_ant(ant)
-            return
+class FoodStrategy(DirectedStrategy):
+    def prefill(self):
+        return self.game.food
 
-        row, col = ant.row, ant.col
-        translated = [
-            (self.direction_map.get_pos(j) + (random.random()*1.5-0.75), i, j)
-            for i, j in (
-                (k, self.game.translate(k, row, col))
-                for k in range(4)
-            )
-            if self.game.can_enter(j)
-        ]
-        if not translated:
-            self.backup_strategy.instruct_ant(ant)
-            return
-        random.shuffle(translated)
-        translated.sort()
-        _, direction, pos = translated[0]
-        ant.move(direction, pos)
+    def orinit(self):
+        return (
+            (
+                (-2 if cell else -1)
+                for cell in row
+            ) 
+            for row in self.game.water_map.strides
+        )
+
+class HillStrategy(DirectedStrategy):
+    def prefill(self):
+        return self.game.enemy_hills
+
+    def orinit(self):
+        return (
+            (
+                (-2 if cell else -1)
+                for cell in row
+            ) 
+            for row in self.game.water_map.strides
+        )
 
 class Ant:
     def __init__(self, game, row, col):

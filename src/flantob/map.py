@@ -42,13 +42,14 @@ class Map:
         return self.get(row, col)
 
 class DirectionMap:
-    def __init__(self, game, prefill, init):
+    def __init__(self, game, prefill, init, limit):
         self.game = game
         strides = self.strides = [list(stride) for stride in init]
         prefill = set((row, col) for row, col in prefill if strides[row][col] != -2)
         for row, col in prefill:
             strides[row][col] = 0
         self.queue = deque(prefill)
+        self.limit = limit
         #self.queue = set((row, col) for row, col in prefill if strides[row][col] != -1)
         #for row, stride in enumerate(self.strides):
         #    err(''.join(('#' if cell == -1 else ('+' if (row, col) in self.queue else '.')) for col, cell in enumerate(stride)))
@@ -66,6 +67,8 @@ class DirectionMap:
             row, col = queue.popleft()
             stride = strides[row]
             value = stride[col] + 1
+            if self.limit and value > self.limit:
+                continue
 
             col2 = (col-1)%cols
             if stride[col2] == -1:
