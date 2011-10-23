@@ -41,19 +41,47 @@ class Map:
         row, col = other
         return self.get(row, col)
 
+    def direction_map_init(self):
+        return (
+            (
+                (-2 if cell else -1)
+                for cell in row
+            ) 
+            for row in self.strides
+        )
+
+    def direction_map_edge_prefill(self):
+        strides = self.strides
+        last_stride = strides[-1]
+        for row, stride in enumerate(strides):
+            last_cell = stride[-1]
+            for col, cell in enumerate(stride):
+                if cell and not last_cell:
+                    yield (row, col)
+                elif not cell and last_cell:
+                    yield (row, col-1)
+                else:
+                    last_cell = last_stride[col]
+                    if cell and not last_cell:
+                        yield (row, col)
+                    elif not cell and last_cell:
+                        yield (row-1, col)
+                last_cell = cell
+            last_stride = stride
+
+    def debug_print(self):
+        for stride in self.strides:
+            err(' '.join(('#' if not cell else '.') for cell in stride))
+
 class DirectionMap:
-    def __init__(self, game, prefill, init, limit):
-        self.game = game
+    def __init__(self, prefill, init, limit):
         strides = self.strides = [list(stride) for stride in init]
+        self.rows, self.cols = len(strides), len(strides[0])
         prefill = set((row, col) for row, col in prefill if strides[row][col] != -2)
         for row, col in prefill:
             strides[row][col] = 0
         self.queue = deque(prefill)
         self.limit = limit
-        #self.queue = set((row, col) for row, col in prefill if strides[row][col] != -1)
-        #for row, stride in enumerate(self.strides):
-        #    err(''.join(('#' if cell == -1 else ('+' if (row, col) in self.queue else '.')) for col, cell in enumerate(stride)))
-        #err()
         self.ready = False
         self.resume()
 
@@ -62,7 +90,7 @@ class DirectionMap:
             return
         queue = self.queue
         strides = self.strides
-        rows, cols = self.game.rows, self.game.cols
+        rows, cols = self.rows, self.cols
         while queue: #and podlicz czas:
             row, col = queue.popleft()
             stride = strides[row]
@@ -95,13 +123,21 @@ class DirectionMap:
         if not queue:
             self.ready=True
 
-        #for stride in self.strides:
-        #    err(' '.join('%2d'%cell for cell in stride))
-        #err()
+    def debug_print(self):
+        for stride in self.strides:
+            err(' '.join(('##' if cell == -2 else '__' if cell == -1 else '%2d'%cell) for cell in stride))
+        err()
 
     def get_pos(self, pos):
         row, col = pos
         return self.strides[row][col]
 
-
+    def invert(self):
+        self.strides = [
+            [
+                (self.limit - cell if cell >= 0 else cell)
+                for cell in stride
+            ]
+            for stride in self.strides
+        ]
 

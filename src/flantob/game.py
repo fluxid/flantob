@@ -52,21 +52,8 @@ class Game:
         self.received_my_hills = set()
         self.received_enemy_hills = set()
         self.received_food = set()
-    
-        random_ = RandomStrategy(self)
-        explorer = ExplorerStrategy(self)
-        hill_explo = HillStrategy(self, backup = explorer, refresh = 4)
-        food_short = FoodStrategy(self, backup = hill_explo, limit = 10, refresh = 2)
-        food_long = FoodStrategy(self, backup = explorer, limit = 50, refresh = 3)
-        hill_food = HillStrategy(self, backup = food_long, refresh = 4)
 
-        self.strategies = [
-            (1, random_),
-            (2, explorer),
-            (4, hill_explo),
-            (9, food_short),
-            (5, hill_food),
-        ]
+        self.strategies = None
 
     def init(self):
         random.seed(self.player_seed)
@@ -74,11 +61,28 @@ class Game:
         self.seen_map = Map(self.rows, self.cols)
         
         mx = self.mx = int(math.sqrt(self.viewradius2))
+        self.ax = int(math.sqrt(self.attackradius2))
         self.vision_map = Map(mx*2+1, mx*2+1)
         for row in range(-mx, mx+1):
             for col in range(-mx, mx+1):
                 if row**2 + col**2 <= self.viewradius2:
                     self.vision_map.set(row+mx, col+mx)
+        #self.vision_map.debug_print()
+    
+        rand = RandomStrategy(self)
+        explo = ExplorerStrategy(self)
+        mx2 = int(math.ceil(2**0.5*mx))
+
+        explo_hill = HillStrategy(self, backup = explo, limit = 8, refresh = 10)
+        explo_food = FoodStrategy(self, backup = explo_hill, limit = mx2, refresh = 4)
+
+        hill_hill = HillStrategy(self, backup = explo, refresh = 7)
+        hill_food = FoodStrategy(self, backup = hill_hill, limit = mx2, refresh = 3)
+
+        self.strategies = [
+            (1, explo_food),
+            (2, hill_food),
+        ]
 
     def clear_temporary_state(self):
         pass
@@ -92,12 +96,12 @@ class Game:
         my_ants = set(self.my_ants)
         dead_ants = my_ants - self.received_ants
         for ant in dead_ants:
-            err('deleting ant', ant)
+            #err('deleting ant', ant)
             self.my_ants[ant].delete()
 
         new_ants = self.received_ants - my_ants
         for row, col in new_ants:
-            err('inserting ant', (row, col))
+            #err('inserting ant', (row, col))
             Ant(self, row, col)
 
         self.visible_map = Map(self.rows, self.cols)
@@ -105,9 +109,6 @@ class Game:
             row, col = ant.row-self.mx, ant.col-self.mx
             self.visible_map.or_with_offset(self.vision_map, row, col)
         self.seen_map.or_with(self.visible_map)
-
-        #for stride in self.seen_map.strides:
-        #    err(''.join(('#' if not cell else '.') for cell in stride))
 
         invisible = self.my_hills - self.received_my_hills
         for pos in invisible:
@@ -124,7 +125,7 @@ class Game:
         invisible = self.food - self.received_food
         for pos in invisible:
             if pos in self.visible_map:
-                err('removing food', pos)
+                #err('removing food', pos)
                 self.food.remove(pos)
         self.food.update(self.received_food)
 

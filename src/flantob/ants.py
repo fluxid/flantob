@@ -29,17 +29,18 @@ class DirectedStrategy(Strategy):
         self.limit = limit
         self.refresh = refresh or self.game.mx
 
-    def prefill(self):
+    def map_prefill(self):
         raise NotImplementedError
 
-    def orinit(self):
+    def map_init(self):
         raise NotImplementedError
 
     def instruct_ant(self, ant):
         if not self.direction_map or (self.game.turn - self.last_gen > self.refresh):
             self.last_gen = self.game.turn
-            #with timer('MAPAAAA'):
-            self.direction_map = DirectionMap(self.game, self.prefill(), init = self.orinit(), limit = self.limit)
+            self.direction_map = DirectionMap(self.map_prefill(), init = self.map_init(), limit = self.limit)
+            #err(self, self.limit)
+            #self.direction_map.debug_print()
             if not self.direction_map.ready:
                 self.backup_strategy.instruct_ant(ant)
                 return
@@ -50,12 +51,13 @@ class DirectedStrategy(Strategy):
 
         row, col = ant.row, ant.col
         value = self.direction_map.get_pos((row, col))
-        #if value == -2:
-        #    self.backup_strategy.instruct_ant(ant)
-        #    return
+        if value == -2:
+            self.backup_strategy.instruct_ant(ant)
+            return
 
         translated = [
-            (a + (random.random()*1.5-0.75), b, c)
+            (a, b, c)
+            #(a + (random.random()*1.5-0.75), b, c)
             for a, b, c in (
                 (self.direction_map.get_pos(j), i, j)
                 for i, j in (
@@ -78,26 +80,10 @@ class DirectedStrategy(Strategy):
         ant.move(direction, pos)
 
 class ExplorerStrategy(DirectedStrategy):
-    def prefill(self):
-        strides = self.game.seen_map.strides
-        last_stride = strides[-1]
-        for row, stride in enumerate(strides):
-            last_cell = stride[-1]
-            for col, cell in enumerate(stride):
-                if cell and not last_cell:
-                    yield (row, col)
-                elif not cell and last_cell:
-                    yield (row, col-1)
-                else:
-                    last_cell = last_stride[col]
-                    if cell and not last_cell:
-                        yield (row, col)
-                    elif not cell and last_cell:
-                        yield (row-1, col)
-                last_cell = cell
-            last_stride = stride
+    def map_prefill(self):
+        return self.game.seen_map.direction_map_edge_prefill()
 
-    def orinit(self):
+    def map_init(self):
         return (
             (
                 (-2 if (not cell1 or cell2) else -1)
@@ -107,30 +93,18 @@ class ExplorerStrategy(DirectedStrategy):
         )
 
 class FoodStrategy(DirectedStrategy):
-    def prefill(self):
+    def map_prefill(self):
         return self.game.food
 
-    def orinit(self):
-        return (
-            (
-                (-2 if cell else -1)
-                for cell in row
-            ) 
-            for row in self.game.water_map.strides
-        )
+    def map_init(self):
+        return self.game.water_map.direction_map_init()
 
 class HillStrategy(DirectedStrategy):
-    def prefill(self):
+    def map_prefill(self):
         return self.game.enemy_hills
 
-    def orinit(self):
-        return (
-            (
-                (-2 if cell else -1)
-                for cell in row
-            ) 
-            for row in self.game.water_map.strides
-        )
+    def map_init(self):
+        return self.game.water_map.direction_map_init()
 
 class Ant:
     def __init__(self, game, row, col):
@@ -163,6 +137,6 @@ class Ant:
         pos = self.row, self.col
         new_pos = self.new_pos
         self.row, self.col = self.new_pos
-        err(pos, new_pos)
+        #err(pos, new_pos)
         self.game.my_ants[new_pos] = self
 
