@@ -104,7 +104,8 @@ class Controller:
         self.game.set_dead_ant(int(row), int(col), int(owner))
  
     def action_turn_go(self):
-        self.game.turn_end()
+        with timer('turn'):
+            self.game.turn_end()
         return 'turns'
 
  

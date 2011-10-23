@@ -1,5 +1,6 @@
 #coding:utf8
 
+import collections
 import random
 
 from .map import DirectionMap
@@ -41,43 +42,39 @@ class DirectedStrategy(Strategy):
             self.direction_map = DirectionMap(self.map_prefill(), init = self.map_init(), limit = self.limit)
             #err(self, self.limit)
             #self.direction_map.debug_print()
-            if not self.direction_map.ready:
-                self.backup_strategy.instruct_ant(ant)
-                return
         elif not self.direction_map.ready:
             self.direction_map.resume()
-            self.backup_strategy.instruct_ant(ant)
-            return
 
         row, col = ant.row, ant.col
         value = self.direction_map.get_pos((row, col))
-        if value == -2:
-            self.backup_strategy.instruct_ant(ant)
+        queue = collections.deque()
+
+        for k in range(4):
+            pos = self.game.translate(k, row, col)
+            value2 = self.direction_map.get_pos(pos)
+            if value2 < 0:
+                continue
+            queue.append((value2, k))
+
+        if not queue:
             return
 
-        translated = [
-            (a, b, c)
-            #(a + (random.random()*1.5-0.75), b, c)
-            for a, b, c in (
-                (self.direction_map.get_pos(j), i, j)
-                for i, j in (
-                    (k, self.game.translate(k, row, col))
-                    for k in range(4)
-                )
-                if self.game.can_enter(j)
-            )
-            if a >= 0
-        ]
-        if not translated:
-            self.backup_strategy.instruct_ant(ant)
-            return
-        random.shuffle(translated)
-        translated.sort()
-        value, direction, pos = translated[0]
-        #if value == -1:
-        #    self.backup_strategy.instruct_ant(ant)
-        #    return
-        ant.move(direction, pos)
+        mmin = min(x for x, y in queue)
+        mmax = max(x for x, y in queue)
+        if value < 0:
+            value = mmax
+        if mmax == mmin:
+            mmax = 1.0
+        else:
+            mmax = float(mmax - mmin)
+
+        for value2, direction in queue:
+            if value > value2:
+                yield 1, direction
+            elif value == value2:
+                yield 0.5, direction
+            else:
+                yield 0.1, direction
 
 class ExplorerStrategy(DirectedStrategy):
     def map_prefill(self):
@@ -111,32 +108,39 @@ class Ant:
         self.game = game
         self.row = row
         self.col = col
-        self.strategy = game.choose_strategy()
+        strategy = game.choose_strategy()
+        if not isinstance(strategy, (list, tuple)):
+            strategy = [(1, strategy)]
+        self.strategy = strategy
  
         pos = self.row, self.col
         self.game.my_ants[pos] = self
 
-        self.new_pos = None
-
     def make_turn(self):
-        self.strategy.instruct_ant(self)
-        if self.direction != -1:
-            return self.row, self.col, self.direction
+        directions = dict()
+        sum_weight = 0
+        for weight, strategy in self.strategy:
+            for confidence, direction in strategy.instruct_ant(self):
+                sum_weight += weight
+                confidence *= weight
+                directions[direction] = directions.get(direction, 0) + confidence
 
-    def move(self, direction, pos):
-        self.new_pos = pos
-        self.direction = direction
-        self.game.occupied.add(pos)
+        err('for ant @', (self.row, self.col), directions)
 
+        found = False
+        for direction, confidence in directions.items():
+            pos = self.game.translate(direction, self.row, self.col)
+            if not self.game.can_enter(pos):
+                continue
+            self.game.candidates.setdefault(pos, []).append((confidence, self, direction))
+            found = True
+
+        if not found:
+            self.game.candidates.setdefault((self.row, self.col), []).append((999, self, -1))
+        
     def delete(self):
         pos = self.row, self.col
-        self.strategy.bury_ant(self)
+        for _, strategy in self.strategy:
+            strategy.bury_ant(self)
         self.game.my_ants.pop(pos, None)
-
-    def finish_turn(self):
-        pos = self.row, self.col
-        new_pos = self.new_pos
-        self.row, self.col = self.new_pos
-        #err(pos, new_pos)
-        self.game.my_ants[new_pos] = self
 

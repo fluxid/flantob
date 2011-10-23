@@ -43,6 +43,7 @@ class Game:
         self.my_ants = dict()
 
         self.food = set()
+        self.candidates = dict()
         self.occupied = set()
 
         self.enemy_hills = set()
@@ -73,15 +74,20 @@ class Game:
         explo = ExplorerStrategy(self)
         mx2 = int(math.ceil(2**0.5*mx))
 
-        explo_hill = HillStrategy(self, backup = explo, limit = 8, refresh = 10)
-        explo_food = FoodStrategy(self, backup = explo_hill, limit = mx2, refresh = 4)
-
-        hill_hill = HillStrategy(self, backup = explo, refresh = 7)
-        hill_food = FoodStrategy(self, backup = hill_hill, limit = mx2, refresh = 3)
+        food = FoodStrategy(self, limit = mx2, refresh = 3)
+        hill = HillStrategy(self, refresh = mx/2)
 
         self.strategies = [
-            (1, explo_food),
-            (2, hill_food),
+            (2, (
+                (1, food),
+                (0.5, explo),
+                (0.1, hill),
+            )),
+            (2, (
+                (0.5, food),
+                (0.6, explo),
+                (1, hill),
+            )),
         ]
 
     def clear_temporary_state(self):
@@ -96,12 +102,12 @@ class Game:
         my_ants = set(self.my_ants)
         dead_ants = my_ants - self.received_ants
         for ant in dead_ants:
-            #err('deleting ant', ant)
+            err('deleting ant', ant)
             self.my_ants[ant].delete()
 
         new_ants = self.received_ants - my_ants
         for row, col in new_ants:
-            #err('inserting ant', (row, col))
+            err('inserting ant', (row, col))
             Ant(self, row, col)
 
         self.visible_map = Map(self.rows, self.cols)
@@ -129,25 +135,44 @@ class Game:
                 self.food.remove(pos)
         self.food.update(self.received_food)
 
-        for ant in self.my_ants.values():
-            move = ant.make_turn()
-            if move:
-                row, col, direction = move
-                print('o %s %s %s' % (row, col, DIR_N2C[direction]))
+        for ant in sorted(self.my_ants.values(), key=lambda x: random.random()):
+            ant.make_turn()
+
+        candidates = sorted(
+            (
+                (pos, tuple(sorted(cs, key=lambda x:x[0], reverse=True)))
+                for pos, cs in self.candidates.items()
+            ),
+            key=lambda x:x[1][0][0], reverse=True
+        )
+
+        moved = set() 
+        new_ants = dict()
+        for pos, cs in candidates:
+            for _, ant, direction in cs:
+                if ant in moved:
+                    continue
+                if direction == -1:
+                    err('not moving', pos)
+                else:
+                    del self.my_ants[(ant.row, ant.col)]
+                    err((ant.row,ant.col), '→', pos, 'dir', direction, DIR_N2C[direction])
+                    print('o %s %s %s' % (ant.row, ant.col, DIR_N2C[direction]))
+                    ant.row, ant.col = pos
+                    new_ants[pos] = ant
+                moved.add(ant)
+                break
+        self.my_ants.update(new_ants)
 
         print('go')
-
-        my_old_ants = self.my_ants
-        self.my_ants = dict()
-        for ant in my_old_ants.values():
-            ant.finish_turn()
 
         self.received_ants.clear()
         self.received_enemy_hills.clear()
         self.received_my_hills.clear()
         self.received_food.clear()
-        self.occupied.clear()
         self.enemy_ants.clear()
+        self.candidates.clear()
+        self.occupied.clear()
 
     def set_water(self, row, col):
         self.water_map.set(row, col)
@@ -183,7 +208,6 @@ class Game:
             
         return not (
             self.water_map.get(row, col) or
-            t in self.occupied or
             t in self.my_hills or
             t in self.food
         )
@@ -201,6 +225,13 @@ class Game:
         elif direction == 3:
             col = (col-1) % self.cols
         return (row, col)
+
+    def distance_straight(self, pos1, pos2):
+        row1, col1 = pos1
+        row2, col2 = pos2
+        col1 -= col2
+        row1 -= row2
+        return math.sqrt(min(row1, self.rows - abs(row1))**2 + min(col1, self.cols - abs(col1))**2)
 
     def random_translate(self, row, col=None):
         if col is None:
