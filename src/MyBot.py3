@@ -18,7 +18,11 @@ if __name__ == '__main__':
         def __exit__(self, type_, value, traceback):
             err(self.arg, '%.4f'%(time.time()-self.time))
 
-    __builtins__.err = err
-    __builtins__.timer = timer
+    if isinstance(__builtins__, dict):
+        __builtins__['err'] = err
+        __builtins__['timer'] = timer
+    else:
+        __builtins__.err = err
+        __builtins__.timer = timer
     controller = Controller()
     controller.run()

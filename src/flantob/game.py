@@ -1,15 +1,21 @@
 #coding:utf8
 
+import collections
 import math
 import random
 
-from .map import Map
+from .map import (
+    DirectionMap,
+    Map,
+)
 from .ants import (
     Ant,
     ExplorerStrategy,
     RandomStrategy,
     FoodStrategy,
     HillStrategy,
+    PeripheryStrategy,
+    TargetStrategy,
 )
 
 DIR_N2C = {
@@ -54,6 +60,10 @@ class Game:
         self.received_enemy_hills = set()
         self.received_food = set()
 
+        self.targeters = dict()
+        self.targets = dict()
+        self.queue_targets = collections.deque()
+
         self.strategies = None
 
     def init(self):
@@ -62,6 +72,7 @@ class Game:
         self.seen_map = Map(self.rows, self.cols)
         
         mx = self.mx = int(math.sqrt(self.viewradius2))
+        mx2 = self.mx2 = int(math.ceil(2**0.5*mx))
         self.ax = int(math.sqrt(self.attackradius2))
         self.vision_map = Map(mx*2+1, mx*2+1)
         for row in range(-mx, mx+1):
@@ -71,23 +82,26 @@ class Game:
         #self.vision_map.debug_print()
     
         rand = RandomStrategy(self)
-        explo = ExplorerStrategy(self)
-        mx2 = int(math.ceil(2**0.5*mx))
+        explo = ExplorerStrategy(self, refresh = 2)#, limit = mx*2)
+        periphery = PeripheryStrategy(self, refresh = 2, offset = 1)#, limit = mx*2)
+        target = TargetStrategy(self)
 
         food = FoodStrategy(self, limit = mx2, refresh = 3)
         hill = HillStrategy(self, refresh = mx/2)
 
         self.strategies = [
             (2, (
-                (1, food),
-                (0.5, explo),
-                (0.1, hill),
+                (0.1, rand),
+                (1, target),
+                (0.4, explo),
+                #(0.4, periphery),
+                (0.9, hill),
             )),
-            (2, (
-                (0.5, food),
-                (0.6, explo),
-                (1, hill),
-            )),
+            #(2, (
+            #    (0.5, food),
+            #    (0.6, explo),
+            #    (1, hill),
+            #)),
         ]
 
     def clear_temporary_state(self):
@@ -103,12 +117,14 @@ class Game:
         dead_ants = my_ants - self.received_ants
         for ant in dead_ants:
             err('deleting ant', ant)
-            self.my_ants[ant].delete()
+            del self.my_ants[ant]
 
         new_ants = self.received_ants - my_ants
         for row, col in new_ants:
             err('inserting ant', (row, col))
-            Ant(self, row, col)
+            ant = Ant(self, row, col)
+            self.set_strategy(ant)
+            self.my_ants[(row, col)] = ant
 
         self.visible_map = Map(self.rows, self.cols)
         for ant in self.my_ants.values():
@@ -126,6 +142,7 @@ class Game:
         for pos in invisible:
             if pos in self.visible_map:
                 self.enemy_hills.remove(pos)
+                self.remove_target(pos)
         self.enemy_hills.update(self.received_enemy_hills)
 
         invisible = self.food - self.received_food
@@ -133,7 +150,27 @@ class Game:
             if pos in self.visible_map:
                 #err('removing food', pos)
                 self.food.remove(pos)
+                self.remove_target(pos)
         self.food.update(self.received_food)
+
+        if self.queue_targets:
+            target = self.queue_targets.popleft()
+            target_map, limit = self.targets[target]
+            target_map = DirectionMap((target,), self.water_map.direction_map_init(), limit)
+            self.targets[target] = (target_map, limit)
+            self.queue_targets.append(target)
+
+        targets = set(self.targets)
+        dispatched = 0
+        for target in self.food - targets:
+            if dispatched > 4:
+                break
+            result = self.dispatch_ant(target, distance_limit=self.mx2+4, ant_limit=3)
+            if result:
+                dispatched += 1
+
+        #for target in self.enemy_hills - targets:
+        #    self.dispatch_ant(target, as_master=0.5)
 
         for ant in sorted(self.my_ants.values(), key=lambda x: random.random()):
             ant.make_turn()
@@ -229,9 +266,9 @@ class Game:
     def distance_straight(self, pos1, pos2):
         row1, col1 = pos1
         row2, col2 = pos2
-        col1 -= col2
-        row1 -= row2
-        return math.sqrt(min(row1, self.rows - abs(row1))**2 + min(col1, self.cols - abs(col1))**2)
+        col1 = abs(col1 - col2)
+        row1 = abs(row1 - row2)
+        return math.sqrt(min(row1, self.rows - row1)**2 + min(col1, self.cols - col1)**2)
 
     def random_translate(self, row, col=None):
         if col is None:
@@ -274,4 +311,52 @@ class Game:
             i += x/s
             if c <= i:
                 return y
+
+    def set_strategy(self, ant):
+        ant.strategy = self.choose_strategy()
+
+    def dispatch_ant(self, target, distance_limit=None, ant_limit=None, as_master=None):
+        closest = sorted(
+            (
+                (pos, self.distance_straight(pos, target), ant)
+                for pos, ant in self.my_ants.items()
+            ),
+            key = lambda x: x[1]
+        )
+        limit2 = distance_limit*2 if distance_limit else 0
+        ant_limit = ant_limit or -1
+        err('checking ants for', target)
+        for pos, distance, ant in closest:
+            if distance > distance_limit:
+                err('distance limit reached')
+                break
+            if ant_limit == 0:
+                err('ant limit reached')
+                break
+            err('ant', pos, 'has distance', distance)
+            if ant.target and not isinstance(ant.target, Ant):
+                tmpdist = self.distance_straight(pos, ant.target)
+                if tmpdist <= distance:
+                    err('ignoring ant', pos, 'it has current target at distance', tmpdist)
+                    continue
+            ant_limit -= 1
+            target_map = DirectionMap((target,), self.water_map.direction_map_init(), limit2)
+            value = target_map.get_pos(target)
+            if value < 0:
+                err('ant', pos, 'doesnt appear to be close enough')
+                continue
+            ant.turns_left = value + 4
+            ant.target = target
+            self.targets[target] = (target_map, limit2)
+            self.targeters[target] = ant
+            self.queue_targets.append(target)
+            err('dispatched ant', pos, 'to', target)
+            return True
+        return False
+
+    def remove_target(self, pos):
+        target = self.targets.pop(pos, None)
+        if target:
+            self.queue_targets.remove(pos)
+            self.targeters.pop(pos).target = None
 
