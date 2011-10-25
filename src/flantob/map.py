@@ -1,29 +1,33 @@
 #coding:utf8
 
 from collections import deque
+from copy import deepcopy
 
 class Map:
+    '''
+    -1 empty
+    -2 taken
+    values to optimize DirectionMap initialization
+    '''
     def __init__(self, rows, cols):
         self.rows = rows
         self.cols = cols
-        self.strides = [[False]*cols for i in range(rows)]
+        self.strides = [[-1]*cols for i in range(rows)]
 
-    def set(self, row, col, value=True):
+    def set(self, row, col, value=-2):
         row%=self.rows
         col%=self.cols
-        self.strides[row][col] = True
+        self.strides[row][col] = value
 
     def get(self, row, col):
         row%=self.rows
         col%=self.cols
-        return self.strides[row][col]
+        return self.strides[row][col] == -2
 
     def or_with(self, other):
-        assert self.rows == other.rows
-        assert self.cols == other.cols
         self.strides = [
             [
-                cell1 or cell2
+                (-2 if (cell1 == -2 or cell2 == -2) else -1)
                 for cell1, cell2 in zip(row1, row2)
             ]
             for row1, row2 in zip(other.strides, self.strides)
@@ -34,34 +38,29 @@ class Map:
             stride = self.strides[(row+row2)%self.rows]
             stride2 = other.strides[row2]
             for col2 in range(other.cols):
-                if stride2[col2]:
-                    stride[(col+col2)%self.cols] = True
+                if stride2[col2] == -2:
+                    stride[(col+col2)%self.cols] = -2
 
     def __contains__(self, other):
         row, col = other
         return self.get(row, col)
 
     def direction_map_init(self):
-        return (
-            (
-                (-2 if cell else -1)
-                for cell in row
-            ) 
-            for row in self.strides
-        )
+        return [list(stride) for stride in self.strides]
 
     def direction_map_edge_prefill(self):
         strides = self.strides
         last_stride = strides[-1]
         for row, stride in enumerate(strides):
-            last_cell = stride[-1]
+            last_cell = stride[-1] == -2
             for col, cell in enumerate(stride):
+                cell = cell == -2
                 if cell and not last_cell:
                     yield (row, col)
                 elif not cell and last_cell:
                     yield (row, col-1)
                 else:
-                    last_cell = last_stride[col]
+                    last_cell = last_stride[col] == -2
                     if cell and not last_cell:
                         yield (row, col)
                     elif not cell and last_cell:
@@ -71,11 +70,11 @@ class Map:
 
     def debug_print(self):
         for stride in self.strides:
-            err(' '.join(('#' if not cell else '.') for cell in stride))
+            err(' '.join(('#' if (cell == -2) else '.') for cell in stride))
 
 class DirectionMap:
     def __init__(self, prefill, init, limit):
-        strides = self.strides = [list(stride) for stride in init]
+        strides = self.strides = init
         self.rows, self.cols = len(strides), len(strides[0])
         prefill = set((row, col) for row, col in prefill if strides[row][col] != -2)
         for row, col in prefill:

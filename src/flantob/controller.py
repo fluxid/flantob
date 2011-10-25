@@ -22,13 +22,10 @@ class Controller:
             try:
                 line = sys.stdin.readline()
             except EOFError:
-                #sys.stderr.write('eof\n')
                 break
-            sys.stderr.write(line)
-            sys.stderr.flush()
             line = line.strip()
+            #err(line)
             if not line:
-                sleep(0.01)
                 continue
             args = RE_SP.split(line)
             command = args.pop(0)
@@ -45,7 +42,6 @@ class Controller:
                 sdict = self.states.get(state)
                 if sdict is None:
                     raise RuntimeError('Unknown state: %s' % state)
-            sleep(0.001)
 
     def action_begin_loadtime(self, loadtime):
         self.game.loadtime = int(loadtime)
@@ -142,3 +138,4 @@ class Controller:
             go = action_end_go,
         ),
     )
+

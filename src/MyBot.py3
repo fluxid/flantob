@@ -8,6 +8,7 @@ if __name__ == '__main__':
     import sys
     def err(*args):
         print(*args, file=sys.stderr)
+        sys.stderr.flush()
     class timer:
         def __init__(self, arg):
             self.arg = arg
@@ -16,7 +17,7 @@ if __name__ == '__main__':
             self.time = time.time()
 
         def __exit__(self, type_, value, traceback):
-            err(self.arg, '%.4f'%(time.time()-self.time))
+            err(self.arg, '%dms'%((time.time()-self.time)*1000))
 
     if isinstance(__builtins__, dict):
         __builtins__['err'] = err
