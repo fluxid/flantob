@@ -19,7 +19,9 @@ class Map:
         col%=self.cols
         self.strides[row][col] = value
 
-    def get(self, row, col):
+    def get(self, row, col=None):
+        if col is None:
+            row, col = row
         row%=self.rows
         col%=self.cols
         return self.strides[row][col] == -2

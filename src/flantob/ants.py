@@ -28,6 +28,9 @@ class RandomStrategy(Strategy):
 
 class DirectedStrategy(Strategy):
     inverted = False
+    def hit_water(self, ant, direction):
+        pass
+
     def get_directions(self, ant, direction_map):
         row, col = ant.row, ant.col
         value = direction_map.get_pos((row, col))
@@ -37,6 +40,9 @@ class DirectedStrategy(Strategy):
             pos = self.game.translate(k, row, col)
             value2 = direction_map.get_pos(pos)
             if value2 < 0:
+                continue
+            if self.game.water_map.get(pos):
+                self.hit_water(ant, direction_map)
                 continue
             queue.append((value2, k))
 
@@ -130,6 +136,19 @@ class HillStrategy(AutoDirectedStrategy):
     def map_init(self):
         return self.game.water_map.direction_map_init()
 
+class MyHillGuardStrategy(AutoDirectedStrategy):
+    def get_pos(self, pos, direction_map):
+        value = direction_map.get_pos(pos)
+        if value <= 4:
+            return 0
+        return value - 4
+
+    def map_prefill(self):
+        return self.game.my_hills
+
+    def map_init(self):
+        return self.game.water_map.direction_map_init()
+
 class AvoidEnemyAltStrategy(AutoDirectedStrategy):
     inverted = True
     def map_prefill(self):
@@ -138,22 +157,69 @@ class AvoidEnemyAltStrategy(AutoDirectedStrategy):
     def map_init(self):
         return self.game.water_map.direction_map_init()
 
-class TargetStrategy(AutoDirectedStrategy):
+class TargetFoodStrategy(AutoDirectedStrategy):
+    def hit_water(self, ant, direction):
+        #err('ant', (ant.row, ant.col), 'hit water when trying to reach', ant.target, 'reloading map')
+        self.game.get_food_map(ant.target, True)
+
     def instruct_ant(self, ant):
-        if not ant.target:
+        target = ant.target
+        if not target:
             return ()
+        direction_map = self.game.food_maps[target][0]
         if ant.turns_left:
             ant.turns_left -= 1
             if not ant.turns_left:
-                #err('ant', (ant.row, ant.col), 'has not runs left to reach target', ant.target)
-                self.game.remove_target(ant.target)
-                return ()
-        direction_map = self.game.targets[ant.target][0]
+                #err('ant', (ant.row, ant.col), 'has not runs left to reach target', target)
+                ant.target = None
+                del self.game.food_targeters[target]
+
         if direction_map.get_pos((ant.row, ant.col)) < 0:
-            #err('ant', (ant.row, ant.col), 'is out of current direction map')
-            self.game.remove_target(ant.target)
+            #err('ant', (ant.row, ant.col), 'is out of current direction map to', target)
+            ant.target = None
+            del self.game.food_targeters[target]
             return ()
         return self.get_directions(ant, direction_map)
+
+
+class AttackEnemyStrategy(Strategy):
+    def instruct_ant(self, ant):
+        d0, d1, d2, d3 = 0, 0, 0, 0
+        limit = float(self.game.mx2+self.game.ax2)/2
+        count = 0
+        for ir, ic, d, ant in self.game.vector_ants((ant.row, ant.col), self.game.enemy_ants.items(), limit):
+            #d = (limit - d)/limit
+            #ir*=d
+            #ic*=d
+
+            #if ic < 0:
+            #    d1 -= ic
+            #else:
+            #    d3 += ic
+
+            #if ir < 0:
+            #    d2 -= ir
+            #else:
+            #    d0 += ir
+
+            if ic < 0:
+                d3 += 1
+            else:
+                d1 += 1
+
+            if ir < 0:
+                d0 += 1
+            else:
+                d2 += 1
+
+            count += 1
+
+        if count:
+            count = float(count)
+            yield d0/count, 0
+            yield d1/count, 1
+            yield d2/count, 2
+            yield d3/count, 3
 
 class AvoidEnemyStrategy(Strategy):
     def instruct_ant(self, ant):
@@ -222,13 +288,13 @@ class Ant:
 
         self.i_wont_move = False
 
-        directions = dict()
+        directions = {0:0, 1:0, 2:0, 3:0}
         sum_weight = 0
         for weight, strategy in self.strategy:
             for confidence, direction in strategy.instruct_ant(self):
                 sum_weight += weight
                 confidence *= weight
-                directions[direction] = directions.get(direction, 0) + confidence
+                directions[direction] += confidence
 
         #err('for ant @', (self.row, self.col), directions)
 

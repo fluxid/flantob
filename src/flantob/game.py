@@ -11,13 +11,15 @@ from .map import (
 from .ants import (
     Ant,
     AvoidEnemyAltStrategy,
+    AttackEnemyStrategy,
     AvoidEnemyStrategy,
     ExplorerStrategy,
     RandomStrategy,
     FoodStrategy,
     HillStrategy,
     PeripheryStrategy,
-    TargetStrategy,
+    TargetFoodStrategy,
+    MyHillGuardStrategy,
 )
 
 DIR_N2C = {
@@ -61,10 +63,8 @@ class Game:
         self.received_enemy_hills = set()
         self.received_food = set()
 
-        self.targeters = dict()
-        self.targets = dict()
-        self.targets_cache = dict()
-        self.queue_targets = collections.deque()
+        self.food_targeters = dict()
+        self.food_maps = dict()
 
         self.strategies = None
 
@@ -85,31 +85,40 @@ class Game:
         #self.vision_map.debug_print()
     
         rand = RandomStrategy(self)
-        explo = ExplorerStrategy(self, refresh = 3)#, limit = mx*2)
-        periphery = PeripheryStrategy(self, refresh = 3, offset = 1, limit = mx*2)
-        target = TargetStrategy(self)
+        explo = ExplorerStrategy(self, refresh = 4)#, limit = mx*2)
+        periphery = PeripheryStrategy(self, refresh = 4, offset = 1, limit = mx*2)
+        target = TargetFoodStrategy(self)
 
         food = FoodStrategy(self, limit = mx2, refresh = 3)
-        hill = HillStrategy(self, refresh = 3, offset = 2)
+        hill = HillStrategy(self, refresh = 4, offset = 2)
+        hill2 = HillStrategy(self, refresh = 4, offset = 3, limit = mx2+3)
 
-        #avoid = AvoidEnemyAltStrategy(self, refresh = 3, offset = 2, limit = ax2+3u)
+        avoid = AvoidEnemyAltStrategy(self, limit = ax2+1)
+        guard = MyHillGuardStrategy(self, refresh=5, limit = mx2*3)
+        attack = AttackEnemyStrategy(self)
 
         self.strategies = [
-            (1, (
+            (7, (
+                (0.1, rand),
+                (2, target),
+                (0.3, explo),
+                (0.3, periphery),
+                (3, avoid),
+                (1, hill),
+            )),
+            (5, (
                 (0.1, rand),
                 (2, target),
                 (0.6, explo),
                 (0.4, periphery),
-                #(90, avoid),
-                #(0.2, hill),
+                (3, avoid),
+                (0.8, hill2),
             )),
-            #(2, (
-            #    (0.1, rand),
+            #(1, (
+            #    #(0.1, rand),
             #    (2, target),
-            #    (0.2, explo),
-            #    (0.2, periphery),
-            #    (0.3, avoid),
-            #    (1, hill),
+            #    (0.3, guard),
+            #    (0.3, attack),
             #)),
         ]
 
@@ -127,7 +136,9 @@ class Game:
         dead_ants = my_ants - self.received_ants
         for ant in dead_ants:
             #err('deleting ant', ant)
-            del self.my_ants[ant]
+            ant = self.my_ants.pop(ant)
+            if ant.target:
+                del self.food_targeters[ant.target]
 
         new_ants = self.received_ants - my_ants
         for row, col in new_ants:
@@ -156,34 +167,35 @@ class Game:
         for pos in invisible:
             if pos in self.visible_map:
                 self.enemy_hills.remove(pos)
-                self.remove_target(pos)
         self.enemy_hills.update(self.received_enemy_hills)
 
-        invisible = self.food - self.received_food
-        for pos in invisible:
-            if pos in self.visible_map:
-                #err('removing food', pos)
-                self.food.remove(pos)
-                self.remove_target(pos)
-        self.food.update(self.received_food)
-
-        if self.queue_targets:
-            target = self.queue_targets.popleft()
-            target_map, limit = self.targets[target]
-            target_map = DirectionMap((target,), self.water_map.direction_map_init(), limit)
-            self.targets[target] = (target_map, limit)
-            self.queue_targets.append(target)
-
         if self.my_hills:
-            targets = set(self.targets)
-            dispatched = 0
-            for target in self.food - targets:
-                result = self.dispatch_ant(target, distance_limit=self.mx2*2, ant_limit=3)
-                if result:
-                    dispatched += 1
+            invisible = self.food - self.received_food
+            for pos in invisible:
+                if pos in self.visible_map:
+                    #err('removing food', pos)
+                    self.food.remove(pos)
+                    targeter = self.food_targeters.pop(pos, None)
+                    if targeter:
+                        targeter.target = None
+            self.food.update(self.received_food)
 
-        #for target in self.enemy_hills - targets:
-        #    self.dispatch_ant(target, as_master=0.5)
+            to_regen = sorted(
+                (
+                    (target, age)
+                    for target, (_, age) in self.food_maps.items()
+                    if target in self.food_targeters
+                ),
+                key = lambda x: x[1],
+            )
+            if to_regen:
+                target, age = to_regen[0]
+                #err('has', len(to_regen), 'maps, regen map for food at', target, 'created', self.turn-age, 'turns ago')
+                food_map = DirectionMap((target,), self.water_map.direction_map_init(), self.mx2*2)
+                self.food_maps[target] = food_map, self.turn
+
+            for target in self.food:
+                self.check_food(target)
 
         for ant in self.my_ants.values():
             ant.make_turn()
@@ -316,52 +328,66 @@ class Game:
     def set_strategy(self, ant):
         ant.strategy = self.choose_strategy()
 
-    def dispatch_ant(self, target, distance_limit=None, ant_limit=None, as_master=None):
-        closest = sorted(
-            (
-                (pos, self.distance_straight(pos, target, True), ant)
-                for pos, ant in self.my_ants.items()
-            ),
-            key = lambda x: x[1]
-        )
-        limit2 = distance_limit*2 if distance_limit else 0
-        ant_limit = ant_limit or -1
-        #err('checking ants for', target)
-        for pos, distance, ant in closest:
-            if distance > distance_limit:
-                #err('distance limit reached')
-                break
-            if ant_limit == 0:
-                #err('ant limit reached')
-                break
-            #err('ant', pos, 'has distance', distance)
-            if ant.target and not isinstance(ant.target, Ant):
-                tmpdist = self.distance_straight(pos, ant.target, True)
-                if tmpdist <= distance:
-                    #err('ignoring ant', pos, 'it has current target at smaller distance', tmpdist)
-                    continue
-                else:
-                    #err('changing target of ant', pos, 'it has current target at larger distance', tmpdist)
-                    self.remove_target(ant.target)
-            ant_limit -= 1
-            
-            target_map = None
-            if not target_map:
-                target_map = DirectionMap((target,), self.water_map.direction_map_init(), limit2)
+    def get_food_map(self, target, regen = False):
+        food_map = self.food_maps.get(target)
+        if regen and food_map:
+            if food_map[1] != self.turn:
+                food_map = None
 
-            value = target_map.get_pos(target)
-            if value < 0:
-                #err('ant', pos, 'doesnt appear to be close enough')
+        if food_map:
+            #err('map to', target, 'is', self.turn-food_map[1], 'turns old')
+            return food_map[0]
+
+        food_map = DirectionMap((target,), self.water_map.direction_map_init(), self.mx2*2)
+        self.food_maps[target] = food_map, self.turn
+        return food_map
+
+    def check_food(self, target):
+        food_map = self.get_food_map(target)
+
+        #err('checking ants for', target)
+        original = possible_targeter = self.food_targeters.get(target)
+        distance = 0
+        if possible_targeter:
+            distance = food_map.get_pos((possible_targeter.row, possible_targeter.col))
+            if distance < 0:
+                possible_targeter = None
+                distance = 0
+
+        for pos, ant in self.my_ants.items():
+            if ant == possible_targeter:
                 continue
-            self.targets_cache
-            ant.turns_left = value + 4
-            ant.target = target
-            self.targets[target] = (target_map, limit2)
-            self.targeters[target] = ant
-            self.queue_targets.append(target)
-            #err('dispatched ant', pos, 'to', target)
-            return True
-        return False
+
+            tmp_distance = food_map.get_pos(pos)
+            if tmp_distance < 0 or distance and tmp_distance >= distance:
+                continue
+
+            if ant.target:
+                current_distance = self.food_maps[ant.target][0].get_pos((ant.row, ant.col))
+                if current_distance <= tmp_distance:
+                    continue
+            distance = tmp_distance
+            possible_targeter = ant
+
+        ant = possible_targeter
+        if not ant:
+            return
+
+        if ant == original:
+            return
+
+        if ant.target and ant.target != target:
+            del self.food_targeters[ant.target]
+
+        if original:
+            del self.food_targeters[original.target]
+            original.target = None
+
+        ant.target = target
+        self.food_targeters[target] = ant
+        #err('ant', (ant.row, ant.col), 'goes to', target)
+        #err('food map looks like this:')
+        #food_map.debug_print()
 
     def vector_ants(self, apos, ants, limit=None):
         gr = self.rows
@@ -390,10 +416,4 @@ class Game:
                     ic += gc
 
             yield ir, ic, distance, ant
-
-    def remove_target(self, pos):
-        target = self.targets.pop(pos, None)
-        if target:
-            self.queue_targets.remove(pos)
-            self.targeters.pop(pos).target = None
 
