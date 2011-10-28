@@ -37,6 +37,8 @@ class Controller:
             state = command(self, *args)
             sys.stdout.flush()
             if state == 'quit':
+                #err('quitting')
+                sys.exit(0)
                 break
             if state:
                 sdict = self.states.get(state)

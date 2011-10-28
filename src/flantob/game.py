@@ -10,16 +10,16 @@ from .map import (
 )
 from .ants import (
     Ant,
-    AvoidEnemyAltStrategy,
-    AttackEnemyStrategy,
-    AvoidEnemyStrategy,
     ExplorerStrategy,
-    RandomStrategy,
+    FocusStrategy,
     FoodStrategy,
     HillStrategy,
-    PeripheryStrategy,
-    TargetFoodStrategy,
     MyHillGuardStrategy,
+    MyHillStrategy,
+    PeripheryStrategy,
+    RandomStrategy,
+    RepellOwnStrategy,
+    TargetFoodStrategy,
 )
 
 DIR_N2C = {
@@ -91,35 +91,50 @@ class Game:
 
         food = FoodStrategy(self, limit = mx2, refresh = 3)
         hill = HillStrategy(self, refresh = 4, offset = 2)
-        hill2 = HillStrategy(self, refresh = 4, offset = 3, limit = mx2+3)
+        hill2 = HillStrategy(self, refresh = 4, offset = 3, limit = mx2)
 
-        avoid = AvoidEnemyAltStrategy(self, limit = ax2+1)
         guard = MyHillGuardStrategy(self, refresh=5, limit = mx2*3)
-        attack = AttackEnemyStrategy(self)
+        repell = RepellOwnStrategy(self)
+        focus = FocusStrategy(self)
+        rules = MyHillStrategy(self)
 
         self.strategies = [
-            (7, (
+            (10, (
                 (0.1, rand),
                 (2, target),
                 (0.3, explo),
                 (0.3, periphery),
-                (3, avoid),
+                (3, focus),
                 (1, hill),
+                (0.5, rules),
             )),
-            (5, (
+            (2, (
+                (0.1, rand),
+                (2, target),
+                (0.5, explo),
+                (0.6, periphery),
+                (3, focus),
+                (0.6, hill2),
+                (0.5, rules),
+                (0.3, repell),
+            )),
+            (6, (
                 (0.1, rand),
                 (2, target),
                 (0.6, explo),
-                (0.4, periphery),
-                (3, avoid),
+                (0.5, periphery),
+                (3, focus),
                 (0.8, hill2),
+                (0.5, rules),
+                (0.3, repell),
             )),
-            #(1, (
-            #    #(0.1, rand),
-            #    (2, target),
-            #    (0.3, guard),
-            #    (0.3, attack),
-            #)),
+            (1, (
+                (0.1, rand),
+                (2, target),
+                (0.3, guard),
+                (1, focus),
+                (1.5, rules),
+            )),
         ]
 
     def clear_temporary_state(self):
@@ -129,7 +144,7 @@ class Game:
 
     def turn_begin(self, turn):
         self.turn = turn
-        #err(turn)
+        #err('turn', turn)
 
     def turn_end(self):
         my_ants = set(self.my_ants)
@@ -255,7 +270,6 @@ class Game:
             
         return not (
             self.water_map.get(row, col) or
-            t in self.my_hills or
             t in self.food
         )
 
@@ -389,31 +403,37 @@ class Game:
         #err('food map looks like this:')
         #food_map.debug_print()
 
-    def vector_ants(self, apos, ants, limit=None):
+    def vector_ants(self, apos, ants, limit2=None, normal_output=False, exclude=None):
         gr = self.rows
         gc = self.cols
         gr2 = gr / 2
         gc2 = gc/ 2
         ra, ca = apos
         for pos, ant in ants:
-            row, col = pos
-            distance = self.distance_straight(apos, pos)
-            if distance > limit:
+            if ant == exclude:
                 continue
+            ir, ic = pos
 
-            ir = row - ra
+            ir -= ra
             if abs(ir) > gr2:
                 if ir > 0:
                     ir -= gr
                 else:
                     ir += gr
 
-            ic = col - ca
+            ic -= ca
             if abs(ic) > gc2:
                 if ic > 0:
                     ic -= gc
                 else:
                     ic += gc
 
-            yield ir, ic, distance, ant
+            distance = ir**2 + ic**2
+            if limit2 and distance > limit2:
+                continue
+
+            if normal_output:
+                yield (ir, ic), ant
+            else:
+                yield ir, ic, distance, ant
 

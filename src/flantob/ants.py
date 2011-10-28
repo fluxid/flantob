@@ -18,13 +18,21 @@ class Strategy:
 
 class RandomStrategy(Strategy):
     def instruct_ant(self, ant):
-        boost = 0
-        if (ant.row, ant.col) in self.game.my_hills:
-            boost = 9999
         return (
-            (random.random() + boost, x)
+            (random.random(), x)
             for x in range(4)
         )
+
+class MyHillStrategy(Strategy):
+    def instruct_ant(self, ant):
+        if (ant.row, ant.col) in self.game.my_hills:
+            for direction in range(4):
+                yield 9999, direction
+        else:
+            for direction in range(4):
+                pos = self.game.translate(direction, ant.row, ant.col)
+                if pos in self.game.my_hills:
+                    yield -1, direction
 
 class DirectedStrategy(Strategy):
     inverted = False
@@ -149,14 +157,6 @@ class MyHillGuardStrategy(AutoDirectedStrategy):
     def map_init(self):
         return self.game.water_map.direction_map_init()
 
-class AvoidEnemyAltStrategy(AutoDirectedStrategy):
-    inverted = True
-    def map_prefill(self):
-        return self.game.enemy_ants
-
-    def map_init(self):
-        return self.game.water_map.direction_map_init()
-
 class TargetFoodStrategy(AutoDirectedStrategy):
     def hit_water(self, ant, direction):
         #err('ant', (ant.row, ant.col), 'hit water when trying to reach', ant.target, 'reloading map')
@@ -181,75 +181,88 @@ class TargetFoodStrategy(AutoDirectedStrategy):
             return ()
         return self.get_directions(ant, direction_map)
 
+class FocusStrategy(Strategy):
+    def instruct_ant(self, ant):
+        search_radius = self.game.attackradius2 * 9
+        attack_radius = self.game.attackradius2
+        arow, acol = ant.row, ant.col
+        apos = (arow, acol)
+        all_enemy_ants_nearby = list(self.game.vector_ants(apos, self.game.enemy_ants.items(), search_radius, True))
+        if not all_enemy_ants_nearby:
+            return
+        #err(len(all_enemy_ants_nearby), 'enemies nearby ant', apos)
+        all_my_ants_nearby = list(self.game.vector_ants(apos, ((pos, 0) for pos in self.game.my_ants), search_radius, True))
+        offsets = ((0, -1, 0), (1, 0, 1), (2, 1, 0), (3, 0, -1)) 
+        for my_direction, my_or, my_oc in offsets:
+            my_apos = (my_or, my_oc)
+            kills_enemy, kills_self = False, False
+            kills_count = 0
+            for enemy_direction, enemy_or, enemy_oc in offsets:
+                enemy_or-= my_or
+                enemy_oc-= my_oc
+                all_ants = [
+                    x
+                    for y in (
+                        (
+                            ((row+enemy_or, col+enemy_oc), owner)
+                            for (row, col), owner in all_enemy_ants_nearby
+                        ),
+                        all_my_ants_nearby,
+                    )
+                    for x in y
+                ]
+                #err(apos, my_direction, enemy_direction, enemy_or, enemy_oc, all_ants)
+                my_enemies = list(self.game.vector_ants((0, 0), all_ants, attack_radius, True, 0))
+                if not my_enemies:
+                    continue
+                min_enemy_weakness = min(
+                    len(list(self.game.vector_ants(pos, all_ants, attack_radius, False, ant)))
+                    for pos, ant in my_enemies
+                )
+                #err(len(my_enemies), 'possible enemies around ant', apos, 'with minimal weakness', min_enemy_weakness)
+                if min_enemy_weakness > len(my_enemies):
+                    kills_enemy = True
+                    kills_count += 1
+                else:
+                    kills_self = True
+                    break
 
-class AttackEnemyStrategy(Strategy):
+            if kills_self:
+                #err('if ant', apos, 'goes to direction', my_direction, 'it may get killed, fleeing!')
+                yield -1, my_direction
+            elif kills_enemy:
+                #err('if ant', apos, 'goes to direction', my_direction, 'it may kill something, CHAAARGE!')
+                yield kills_count*0.25, my_direction
+
+class RepellOwnStrategy(Strategy):
     def instruct_ant(self, ant):
         d0, d1, d2, d3 = 0, 0, 0, 0
-        limit = float(self.game.mx2+self.game.ax2)/2
+        limit = float(self.game.viewradius2)
         count = 0
-        for ir, ic, d, ant in self.game.vector_ants((ant.row, ant.col), self.game.enemy_ants.items(), limit):
-            #d = (limit - d)/limit
-            #ir*=d
-            #ic*=d
-
-            #if ic < 0:
-            #    d1 -= ic
-            #else:
-            #    d3 += ic
-
-            #if ir < 0:
-            #    d2 -= ir
-            #else:
-            #    d0 += ir
+        for ir, ic, d, ant in self.game.vector_ants((ant.row, ant.col), self.game.my_ants.items(), limit):
+            d = (limit - d)/limit
+            ir*=d
+            ic*=d
 
             if ic < 0:
-                d3 += 1
+                d1 -= ic
             else:
-                d1 += 1
+                d3 += ic
 
             if ir < 0:
-                d0 += 1
+                d2 -= ir
             else:
-                d2 += 1
-
-            count += 1
-
-        if count:
-            count = float(count)
-            yield d0/count, 0
-            yield d1/count, 1
-            yield d2/count, 2
-            yield d3/count, 3
-
-class AvoidEnemyStrategy(Strategy):
-    def instruct_ant(self, ant):
-        d0, d1, d2, d3 = 0, 0, 0, 0
-        limit = float(self.game.mx2)
-        count = 0
-        for ir, ic, d, ant in self.game.vector_ants((ant.row, ant.col), self.game.enemy_ants.items(), limit):
-            #d = (limit - d)/limit
-            #ir*=d
-            #ic*=d
+                d0 += ir
 
             #if ic < 0:
-            #    d1 -= ic
+            #    d1 += 1
             #else:
-            #    d3 += ic
+            #    d3 += 1
 
             #if ir < 0:
-            #    d2 -= ir
+            #    d2 += 1
             #else:
-            #    d0 += ir
-
-            if ic < 0:
-                d1 += 1
-            else:
-                d3 += 1
-
-            if ir < 0:
-                d2 += 1
-            else:
-                d0 += 1
+            #    d0 += 1
 
             count += 1
 
