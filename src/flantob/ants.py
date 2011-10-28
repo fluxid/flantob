@@ -273,20 +273,38 @@ class RepellOwnStrategy(Strategy):
             yield d2/count, 2
             yield d3/count, 3
 
+class Manager:
+    def __init__(self, *strategies):
+        self.strategies = strategies
+
+    def get_moves(self, ant):
+        directions = {0:0, 1:0, 2:0, 3:0}
+        sum_weight = 0
+        for weight, strategy in self.strategies:
+            for confidence, direction in strategy.instruct_ant(ant):
+                sum_weight += weight
+                confidence *= weight
+                directions[direction] += confidence
+
+        #err('for ant @', (ant.row, ant.col), directions)
+
+        return list(sorted(
+            directions.items(),
+            key = lambda x: x[1],
+            reverse = True,
+        ))
+
 class Ant:
     def __init__(self, game, row, col):
         self.game = game
         self.row = row
         self.col = col
-        strategy = None
-        if not isinstance(strategy, (list, tuple)):
-            strategy = [(1, strategy)]
-        self.strategy = strategy
+        self.manager = None
  
         pos = self.row, self.col
         self.target = None
         self.turns_left = None
-        self.followers = set()
+        self.hive = None
 
         self.i_wont_move = False
         self.considered_moves = None
@@ -297,25 +315,9 @@ class Ant:
         self.confidence = None
 
     def make_turn(self):
-        assert self.strategy
-
         self.i_wont_move = False
 
-        directions = {0:0, 1:0, 2:0, 3:0}
-        sum_weight = 0
-        for weight, strategy in self.strategy:
-            for confidence, direction in strategy.instruct_ant(self):
-                sum_weight += weight
-                confidence *= weight
-                directions[direction] += confidence
-
-        #err('for ant @', (self.row, self.col), directions)
-
-        self.considered_moves = list(sorted(
-            directions.items(),
-            key = lambda x: x[1],
-            reverse = True,
-        ))
+        self.considered_moves = self.manager.get_moves(self)
 
         self.next_consideration = 0
         self.reconsider_move()

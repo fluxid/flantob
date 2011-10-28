@@ -8,19 +8,7 @@ from .map import (
     DirectionMap,
     Map,
 )
-from .ants import (
-    Ant,
-    ExplorerStrategy,
-    FocusStrategy,
-    FoodStrategy,
-    HillStrategy,
-    MyHillGuardStrategy,
-    MyHillStrategy,
-    PeripheryStrategy,
-    RandomStrategy,
-    RepellOwnStrategy,
-    TargetFoodStrategy,
-)
+from . import ants
 
 DIR_N2C = {
     0:'n',
@@ -84,22 +72,21 @@ class Game:
                     self.vision_map.set(row+mx, col+mx)
         #self.vision_map.debug_print()
     
-        rand = RandomStrategy(self)
-        explo = ExplorerStrategy(self, refresh = 4)#, limit = mx*2)
-        periphery = PeripheryStrategy(self, refresh = 4, offset = 1, limit = mx*2)
-        target = TargetFoodStrategy(self)
+        rand = ants.RandomStrategy(self)
+        explo = ants.ExplorerStrategy(self, refresh = 4)#, limit = mx*2)
+        periphery = ants.PeripheryStrategy(self, refresh = 4, offset = 1, limit = mx*2)
+        target = ants.TargetFoodStrategy(self)
 
-        food = FoodStrategy(self, limit = mx2, refresh = 3)
-        hill = HillStrategy(self, refresh = 4, offset = 2)
-        hill2 = HillStrategy(self, refresh = 4, offset = 3, limit = mx2)
+        hill = ants.HillStrategy(self, refresh = 4, offset = 2)
+        hill2 = ants.HillStrategy(self, refresh = 4, offset = 3, limit = mx2)
 
-        guard = MyHillGuardStrategy(self, refresh=5, limit = mx2*3)
-        repell = RepellOwnStrategy(self)
-        focus = FocusStrategy(self)
-        rules = MyHillStrategy(self)
+        guard = ants.MyHillGuardStrategy(self, refresh=5, limit = mx2*3)
+        repell = ants.RepellOwnStrategy(self)
+        focus = ants.FocusStrategy(self)
+        rules = ants.MyHillStrategy(self)
 
-        self.strategies = [
-            (10, (
+        self.managers = [
+            (10, ants.Manager(
                 (0.1, rand),
                 (2, target),
                 (0.3, explo),
@@ -108,7 +95,7 @@ class Game:
                 (1, hill),
                 (0.5, rules),
             )),
-            (2, (
+            (2, ants.Manager(
                 (0.1, rand),
                 (2, target),
                 (0.5, explo),
@@ -118,7 +105,7 @@ class Game:
                 (0.5, rules),
                 (0.3, repell),
             )),
-            (6, (
+            (6, ants.Manager(
                 (0.1, rand),
                 (2, target),
                 (0.6, explo),
@@ -128,7 +115,7 @@ class Game:
                 (0.5, rules),
                 (0.3, repell),
             )),
-            (1, (
+            (1, ants.Manager(
                 (0.1, rand),
                 (2, target),
                 (0.3, guard),
@@ -158,8 +145,8 @@ class Game:
         new_ants = self.received_ants - my_ants
         for row, col in new_ants:
             #err('inserting ant', (row, col))
-            ant = Ant(self, row, col)
-            self.set_strategy(ant)
+            ant = ants.Ant(self, row, col)
+            ant.manager = self.choose_manager(ant)
             self.my_ants[(row, col)] = ant
 
         self.visible_map = Map(self.rows, self.cols)
@@ -321,26 +308,14 @@ class Game:
         direction = random.randint(0, 3)
         return direction, self.translate(direction, row, col)
 
-    def choose_strategy(self, except_=None):
-        if except_:
-            strategies = [
-                (x, y)
-                for x, y in self.strategies
-                if not isinstance(y, except_)
-            ]
-        else:
-            strategies = self.strategies
-
-        s = float(sum(x for x, y in strategies))
+    def choose_manager(self, except_=None):
+        s = float(sum(x for x, y in self.managers))
         c = random.random()
         i = 0
-        for x, y in strategies:
+        for x, y in self.managers:
             i += x/s
             if c <= i:
                 return y
-
-    def set_strategy(self, ant):
-        ant.strategy = self.choose_strategy()
 
     def get_food_map(self, target, regen = False):
         food_map = self.food_maps.get(target)
