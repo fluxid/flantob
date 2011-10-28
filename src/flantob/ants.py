@@ -147,9 +147,9 @@ class HillStrategy(AutoDirectedStrategy):
 class MyHillGuardStrategy(AutoDirectedStrategy):
     def get_pos(self, pos, direction_map):
         value = direction_map.get_pos(pos)
-        if value <= 4:
-            return 0
-        return value - 4
+        if value <= 2:
+            return 2 - value
+        return value - 2
 
     def map_prefill(self):
         return self.game.my_hills
@@ -304,7 +304,7 @@ class Ant:
         pos = self.row, self.col
         self.target = None
         self.turns_left = None
-        self.hive = None
+        self.hill = None
 
         self.i_wont_move = False
         self.considered_moves = None

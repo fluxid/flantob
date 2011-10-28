@@ -38,6 +38,7 @@ class Game:
         self.mx = 0
 
         self.my_hills = set()
+        self.hill_guards = dict()
         self.my_ants = dict()
 
         self.food = set()
@@ -85,7 +86,7 @@ class Game:
         focus = ants.FocusStrategy(self)
         rules = ants.MyHillStrategy(self)
 
-        self.managers = [
+        self.managers_attackers = (
             (10, ants.Manager(
                 (0.1, rand),
                 (2, target),
@@ -95,6 +96,8 @@ class Game:
                 (1, hill),
                 (0.5, rules),
             )),
+        )
+        self.managers_explorers = (
             (2, ants.Manager(
                 (0.1, rand),
                 (2, target),
@@ -115,14 +118,14 @@ class Game:
                 (0.5, rules),
                 (0.3, repell),
             )),
-            (1, ants.Manager(
-                (0.1, rand),
-                (2, target),
-                (0.3, guard),
-                (1, focus),
-                (1.5, rules),
-            )),
-        ]
+        )
+        self.manager_defender = ants.Manager(
+            (0.1, rand),
+            (2, target),
+            (0.3, guard),
+            (1, focus),
+            (1.5, rules),
+        )
 
     def clear_temporary_state(self):
         pass
@@ -139,6 +142,9 @@ class Game:
         for ant in dead_ants:
             #err('deleting ant', ant)
             ant = self.my_ants.pop(ant)
+            hill = ant.hill
+            if hill and hill in self.hill_guards:
+                self.hill_guards[hill] -= 1
             if ant.target:
                 del self.food_targeters[ant.target]
 
@@ -146,7 +152,7 @@ class Game:
         for row, col in new_ants:
             #err('inserting ant', (row, col))
             ant = ants.Ant(self, row, col)
-            ant.manager = self.choose_manager(ant)
+            self.set_manager(ant)
             self.my_ants[(row, col)] = ant
 
         self.visible_map = Map(self.rows, self.cols)
@@ -284,38 +290,30 @@ class Game:
         else:
             return math.sqrt(min(row1, self.rows - row1)**2 + min(col1, self.cols - col1)**2)
 
-    def random_translate(self, row, col=None):
-        if col is None:
-            row, col = row
-        
-        translated = [
-            (i, j)
-            for i, j in (
-                (k, self.translate(k, row, col))
-                for k in range(4)
-            )
-            if self.can_enter(j)
-        ]
+    def set_manager(self, ant):
+        pos = ant.row, ant.col
+        may_be_defender = False
+        if self.turn < 41:
+            manager_list = self.managers_explorers
+        else:
+            manager_list = self.managers_explorers + self.managers_attackers
+            if self.my_hills and pos in self.my_hills and self.hill_guards.get(pos, 0) < 4:
+                may_be_defender = True
+                manager_list += ((sum(x for x, y in manager_list), self.manager_defender),)
 
-        if translated:
-            return random.choice(translated)
-
-        if self.can_enter(row, col):
-            # Don't move at all
-            return -1, (row, col)
-
-        # Fuckup warning: we may loose ant or collide it with other...
-        direction = random.randint(0, 3)
-        return direction, self.translate(direction, row, col)
-
-    def choose_manager(self, except_=None):
-        s = float(sum(x for x, y in self.managers))
+        s = float(sum(x for x, y in manager_list))
         c = random.random()
         i = 0
-        for x, y in self.managers:
+        for x, manager in manager_list:
             i += x/s
             if c <= i:
-                return y
+                break
+
+        if may_be_defender and manager == self.manager_defender:
+            self.hill_guards[pos] = self.hill_guards.get(pos, 0) + 1
+            ant.hill = pos
+
+        ant.manager = manager
 
     def get_food_map(self, target, regen = False):
         food_map = self.food_maps.get(target)
