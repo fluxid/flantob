@@ -4,6 +4,7 @@ import collections
 import math
 import random
 
+from . import cstuff
 from .map import (
     DirectionMap,
     Map,
@@ -34,6 +35,9 @@ class Game:
         self.visible_map = None
         self.vision_map = None
 
+        self.area = 1
+        self.area_visible = 0
+
         self.turn = 0
         self.mx = 0
 
@@ -61,8 +65,12 @@ class Game:
         random.seed(self.player_seed)
         self.water_map = Map(self.rows, self.cols)
         self.seen_map = Map(self.rows, self.cols)
+        self.area = float(self.rows * self.cols)
+
+        cstuff.init(self.rows, self.cols, self.viewradius2)
         
-        mx = self.mx = int(math.sqrt(self.viewradius2))
+        mxf = math.sqrt(self.viewradius2)
+        mx = self.mx = int(mxf)
         mx2 = self.mx2 = int(math.ceil(2**0.5*mx))
         ax = self.ax = int(math.sqrt(self.attackradius2))
         ax2 = self.ax2 = int(math.ceil(2**0.5*ax))
@@ -71,60 +79,66 @@ class Game:
             for col in range(-mx, mx+1):
                 if row**2 + col**2 <= self.viewradius2:
                     self.vision_map.set(row+mx, col+mx)
-        #self.vision_map.debug_print()
     
         rand = ants.RandomStrategy(self)
-        explo = ants.ExplorerStrategy(self, refresh = 4)#, limit = mx*2)
-        periphery = ants.PeripheryStrategy(self, refresh = 4, offset = 1, limit = mx*2)
+        explo = ants.ExplorerStrategy(self)
+        periphery = ants.PeripheryStrategy(self)
         target = ants.TargetFoodStrategy(self)
 
-        hill = ants.HillStrategy(self, refresh = 4, offset = 2)
-        hill2 = ants.HillStrategy(self, refresh = 4, offset = 3, limit = mx2)
+        hill = ants.HillStrategy(self)
+        hill2 = ants.HillStrategy(self, limit = mx2)
 
         guard = ants.MyHillGuardStrategy(self, refresh=5, limit = mx2*3)
         repell = ants.RepellOwnStrategy(self)
+        group = ants.GroupOwnStrategy(self)
         focus = ants.FocusStrategy(self)
-        rules = ants.MyHillStrategy(self)
+        rules = ants.SimpleRulesStrategy(self)
 
         self.managers_attackers = (
-            (10, ants.Manager(
-                (0.1, rand),
-                (2, target),
-                (0.3, explo),
+            (5, ants.Manager(
+                'attacker',
+                (0.05, rand),
+                (3, target),
+                (0.4, explo),
                 (0.3, periphery),
-                (3, focus),
-                (1, hill),
-                (0.5, rules),
+                (5, focus),
+                (1.4, hill),
+                (1, rules),
+                (0.1, group),
+            )),
+            (6, ants.Manager(
+                'attacker',
+                (0.05, rand),
+                (3, target),
+                (0.4, explo),
+                (0.3, periphery),
+                (5, focus),
+                (1.4, hill),
+                (1, rules),
+                (0.1, repell),
             )),
         )
         self.managers_explorers = (
-            (2, ants.Manager(
-                (0.1, rand),
-                (2, target),
+            (1, ants.Manager(
+                'explorer',
+                (0.05, rand),
+                (3, target),
                 (0.5, explo),
-                (0.6, periphery),
-                (3, focus),
+                (0.3, periphery),
+                (5, focus),
                 (0.6, hill2),
-                (0.5, rules),
-                (0.3, repell),
-            )),
-            (6, ants.Manager(
-                (0.1, rand),
-                (2, target),
-                (0.6, explo),
-                (0.5, periphery),
-                (3, focus),
-                (0.8, hill2),
-                (0.5, rules),
-                (0.3, repell),
+                (1, rules),
+                (0.1, repell),
             )),
         )
+        self.explorer_expand = 4
         self.manager_defender = ants.Manager(
-            (0.1, rand),
+            'defender',
+            (0.05, rand),
             (2, target),
             (0.3, guard),
             (1, focus),
-            (1.5, rules),
+            (1, rules),
         )
 
     def clear_temporary_state(self):
@@ -160,6 +174,14 @@ class Game:
             row, col = ant.row-self.mx, ant.col-self.mx
             self.visible_map.or_with_offset(self.vision_map, row, col)
         self.seen_map.or_with(self.visible_map)
+
+        #print('v setFillColor 0 0 0 0.8')
+        #for row, stride in enumerate(self.seen_map.strides):
+        #    for col, value in enumerate(stride):
+        #        if value != -2:
+        #            print('v tile %s %s'%(row, col))
+
+        self.area_visible = sum(-x-1 for stride in self.visible_map.strides for x in stride) / self.area
         #err('visible map')
         #self.visible_map.debug_print()
         #err('seen map')
@@ -214,7 +236,7 @@ class Game:
             new_ants[pos] = ant
             if ant.i_wont_move:
                 continue
-            #err((ant.row,ant.col), '→', pos, 'dir', direction, DIR_N2C[direction])
+            #err((ant.row,ant.col), '→', pos, 'dir', direction, DIR_N2C[direction], ant.manager.name, ant.confidence)
             print('o %s %s %s' % (ant.row, ant.col, DIR_N2C[direction]))
             ant.row, ant.col = pos
         assert len(self.my_ants) == len(new_ants)
@@ -292,14 +314,20 @@ class Game:
 
     def set_manager(self, ant):
         pos = ant.row, ant.col
-        may_be_defender = False
-        if self.turn < 41:
-            manager_list = self.managers_explorers
-        else:
-            manager_list = self.managers_explorers + self.managers_attackers
-            if self.my_hills and pos in self.my_hills and self.hill_guards.get(pos, 0) < 4:
-                may_be_defender = True
-                manager_list += ((sum(x for x, y in manager_list), self.manager_defender),)
+
+        # less explorers if much of map is visible
+        manager_list = list(self.managers_attackers)
+        expand = self.explorer_expand * (1-self.area_visible)
+        manager_list.extend(
+            (x+expand, y)
+            for x, y in self.managers_explorers
+        )
+        #err(self.turn, expand)
+        #manager_list = self.managers_explorers + self.managers_attackers
+        if self.turn > 40 and self.my_hills and pos in self.my_hills and self.hill_guards.get(pos, 0) < 4:
+            # 50% chance
+            manager_list.append((sum(x for x, y in manager_list), self.manager_defender))
+            #manager_list += ((sum(x for x, y in manager_list), self.manager_defender),)
 
         s = float(sum(x for x, y in manager_list))
         c = random.random()
@@ -309,7 +337,7 @@ class Game:
             if c <= i:
                 break
 
-        if may_be_defender and manager == self.manager_defender:
+        if manager == self.manager_defender:
             self.hill_guards[pos] = self.hill_guards.get(pos, 0) + 1
             ant.hill = pos
 

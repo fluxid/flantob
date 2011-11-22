@@ -51,28 +51,30 @@ class Map:
         return [list(stride) for stride in self.strides]
 
     def direction_map_edge_prefill(self):
-        strides = self.strides
-        last_stride = strides[-1]
-        for row, stride in enumerate(strides):
-            last_cell = stride[-1] == -2
-            for col, cell in enumerate(stride):
-                cell = cell == -2
-                if cell and not last_cell:
-                    yield (row, col)
-                elif not cell and last_cell:
-                    yield (row, col-1)
-                else:
-                    last_cell = last_stride[col] == -2
-                    if cell and not last_cell:
-                        yield (row, col)
-                    elif not cell and last_cell:
-                        yield (row-1, col)
-                last_cell = cell
-            last_stride = stride
+        return direction_map_edge_prefill(self.strides)
 
     def debug_print(self):
         for stride in self.strides:
             err(' '.join(('#' if (cell == -2) else '.') for cell in stride))
+
+def direction_map_edge_prefill(strides):
+    last_stride = strides[-1]
+    for row, stride in enumerate(strides):
+        last_cell = stride[-1] == -2
+        for col, cell in enumerate(stride):
+            cell = cell == -2
+            if cell and not last_cell:
+                yield (row, col)
+            elif not cell and last_cell:
+                yield (row, col-1)
+            else:
+                last_cell = last_stride[col] == -2
+                if cell and not last_cell:
+                    yield (row, col)
+                elif not cell and last_cell:
+                    yield (row-1, col)
+            last_cell = cell
+        last_stride = stride
 
 class DirectionMap:
     def __init__(self, prefill, init, limit):

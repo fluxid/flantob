@@ -4,7 +4,8 @@ import collections
 import math
 import random
 
-from .map import DirectionMap
+from . import cstuff
+from .map import DirectionMap, direction_map_edge_prefill
 
 class Strategy:
     def __init__(self, game):
@@ -23,16 +24,27 @@ class RandomStrategy(Strategy):
             for x in range(4)
         )
 
-class MyHillStrategy(Strategy):
+class SimpleRulesStrategy(Strategy):
     def instruct_ant(self, ant):
         if (ant.row, ant.col) in self.game.my_hills:
             for direction in range(4):
-                yield 9999, direction
+                pos = self.game.translate(direction, ant.row, ant.col)
+                counter = 0
+                row2, col2 = pos
+                for direction2 in range(4):
+                    pos2 = self.game.translate(direction2, row2, col2)
+                    if pos2 in self.game.my_hills or self.game.water_map.get(*pos2):
+                        counter += 1
+                if counter == 4:
+                    # Don't go into that fucking hole by the hill in maze map!
+                    yield -1, direction
+                else:
+                    yield 1, direction
         else:
             for direction in range(4):
                 pos = self.game.translate(direction, ant.row, ant.col)
                 if pos in self.game.my_hills:
-                    yield -1, direction
+                    yield -10, direction
 
 class DirectedStrategy(Strategy):
     inverted = False
@@ -82,8 +94,13 @@ class AutoDirectedStrategy(DirectedStrategy):
         self.last_gen = game.turn
         self.direction_map = None
         self.limit = limit
-        self.refresh = refresh or self.game.mx
+        if refresh and refresh < 2:
+            refresh = None
+        self.refresh = refresh
         self.offset = offset
+
+    def map_preinit(self):
+        pass
 
     def map_prefill(self):
         raise NotImplementedError
@@ -91,10 +108,14 @@ class AutoDirectedStrategy(DirectedStrategy):
     def map_init(self):
         raise NotImplementedError
 
+    def make_map(self):
+        self.map_preinit()
+        self.direction_map = DirectionMap(self.map_prefill(), init = self.map_init(), limit = self.limit)
+
     def instruct_ant(self, ant):
-        if not self.direction_map or self.last_gen < self.game.turn and not (self.game.turn + self.offset)%self.refresh:
+        if not self.direction_map or self.last_gen < self.game.turn and (not self.refresh or (self.game.turn + self.offset)%self.refresh):
             self.last_gen = self.game.turn
-            self.direction_map = DirectionMap(self.map_prefill(), init = self.map_init(), limit = self.limit)
+            self.make_map()
             #err(self, self.limit)
             #self.direction_map.debug_print()
         elif not self.direction_map.ready:
@@ -118,8 +139,17 @@ class ExplorerStrategy(AutoDirectedStrategy):
         ]
 
 class PeripheryStrategy(AutoDirectedStrategy):
+    def map_preinit(self):
+        gomap = self.gomap = cstuff.find_low_density_blobs(self.game.my_ants, self.game.water_map.strides)
+        #print('v setFillColor 255 255 255 0.3')
+        #for row, stride in enumerate(gomap):
+        #    for col, value in enumerate(stride):
+        #        if value == -1:
+        #            print('v tile %s %s'%(row, col))
+
     def map_prefill(self):
-        return self.game.visible_map.direction_map_edge_prefill()
+        return direction_map_edge_prefill(self.gomap)
+        #return self.game.visible_map.direction_map_edge_prefill()
 
     def map_init(self):
         return [
@@ -127,8 +157,31 @@ class PeripheryStrategy(AutoDirectedStrategy):
                 (-2 if (cell1 == -1 or cell2 == -2) else -1)
                 for cell1, cell2 in zip(row1, row2)
             ]
-            for row1, row2 in zip(self.game.visible_map.strides, self.game.water_map.strides)
+            for row1, row2 in zip(self.gomap, self.game.water_map.strides)
         ]
+
+    def make_map(self):
+        r = super().make_map()
+        #gc = None
+        #def ccc(cc):
+        #    nonlocal gc
+        #    if cc != gc:
+        #        print('v setFillColor ' + cc)
+        #        gc = cc
+        #for row, stride in enumerate(self.direction_map.strides):
+        #    for col, value in enumerate(stride):
+        #        if value == -1:
+        #            continue
+        #        elif value == -2:
+        #            continue
+        #            ccc('0 0 255 0.3')
+        #        else:
+        #            x = 1.0 - (value/10.0)
+        #            if x<=0:
+        #                continue
+        #            ccc('255 255 255 %.2f'%x)
+        #        print('v tile %s %s'%(row, col))
+        return r
 
 class FoodStrategy(AutoDirectedStrategy):
     def map_prefill(self):
@@ -254,15 +307,34 @@ class RepellOwnStrategy(Strategy):
             else:
                 d0 += ir
 
-            #if ic < 0:
-            #    d1 += 1
-            #else:
-            #    d3 += 1
+            count += 1
 
-            #if ir < 0:
-            #    d2 += 1
-            #else:
-            #    d0 += 1
+        if count:
+            count = float(count)
+            yield d0/count, 0
+            yield d1/count, 1
+            yield d2/count, 2
+            yield d3/count, 3
+
+class GroupOwnStrategy(Strategy):
+    def instruct_ant(self, ant):
+        d0, d1, d2, d3 = 0, 0, 0, 0
+        limit = float(self.game.viewradius2)
+        count = 0
+        for ir, ic, d, ant in self.game.vector_ants((ant.row, ant.col), self.game.my_ants.items(), limit):
+            d = (limit - d)/limit
+            ir*=d
+            ic*=d
+
+            if ic < 0:
+                d1 += ic
+            else:
+                d3 -= ic
+
+            if ir < 0:
+                d2 += ir
+            else:
+                d0 -= ir
 
             count += 1
 
@@ -274,8 +346,9 @@ class RepellOwnStrategy(Strategy):
             yield d3/count, 3
 
 class Manager:
-    def __init__(self, *strategies):
+    def __init__(self, name, *strategies):
         self.strategies = strategies
+        self.name = name
 
     def get_moves(self, ant):
         directions = {0:0, 1:0, 2:0, 3:0}

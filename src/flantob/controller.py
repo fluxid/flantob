@@ -24,9 +24,9 @@ class Controller:
             except EOFError:
                 break
             line = line.strip()
-            #err(line)
             if not line:
                 continue
+            #err(line)
             args = RE_SP.split(line)
             command = args.pop(0)
 
