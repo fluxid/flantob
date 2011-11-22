@@ -1,4 +1,7 @@
 *.sw[po]
 *.py[co]
 __pycache__
-log.txt
+/log.txt
+/src/flantob.zip
+/src/flantob/cstuff.so
+/tcpclient.py
