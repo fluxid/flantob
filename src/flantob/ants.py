@@ -234,59 +234,6 @@ class TargetFoodStrategy(AutoDirectedStrategy):
             return ()
         return self.get_directions(ant, direction_map)
 
-class FocusStrategy(Strategy):
-    def instruct_ant(self, ant):
-        search_radius = self.game.attackradius2 * 9
-        attack_radius = self.game.attackradius2
-        arow, acol = ant.row, ant.col
-        apos = (arow, acol)
-        all_enemy_ants_nearby = list(self.game.vector_ants(apos, self.game.enemy_ants.items(), search_radius, True))
-        if not all_enemy_ants_nearby:
-            return
-        #err(len(all_enemy_ants_nearby), 'enemies nearby ant', apos)
-        all_my_ants_nearby = list(self.game.vector_ants(apos, ((pos, 0) for pos in self.game.my_ants), search_radius, True))
-        offsets = ((0, -1, 0), (1, 0, 1), (2, 1, 0), (3, 0, -1)) 
-        for my_direction, my_or, my_oc in offsets:
-            my_apos = (my_or, my_oc)
-            kills_enemy, kills_self = False, False
-            kills_count = 0
-            for enemy_direction, enemy_or, enemy_oc in offsets:
-                enemy_or-= my_or
-                enemy_oc-= my_oc
-                all_ants = [
-                    x
-                    for y in (
-                        (
-                            ((row+enemy_or, col+enemy_oc), owner)
-                            for (row, col), owner in all_enemy_ants_nearby
-                        ),
-                        all_my_ants_nearby,
-                    )
-                    for x in y
-                ]
-                #err(apos, my_direction, enemy_direction, enemy_or, enemy_oc, all_ants)
-                my_enemies = list(self.game.vector_ants((0, 0), all_ants, attack_radius, True, 0))
-                if not my_enemies:
-                    continue
-                min_enemy_weakness = min(
-                    len(list(self.game.vector_ants(pos, all_ants, attack_radius, False, ant)))
-                    for pos, ant in my_enemies
-                )
-                #err(len(my_enemies), 'possible enemies around ant', apos, 'with minimal weakness', min_enemy_weakness)
-                if min_enemy_weakness > len(my_enemies):
-                    kills_enemy = True
-                    kills_count += 1
-                else:
-                    kills_self = True
-                    break
-
-            if kills_self:
-                #err('if ant', apos, 'goes to direction', my_direction, 'it may get killed, fleeing!')
-                yield -1, my_direction
-            elif kills_enemy:
-                #err('if ant', apos, 'goes to direction', my_direction, 'it may kill something, CHAAARGE!')
-                yield kills_count*0.25, my_direction
-
 class RepellOwnStrategy(Strategy):
     def instruct_ant(self, ant):
         d0, d1, d2, d3 = 0, 0, 0, 0
@@ -361,11 +308,7 @@ class Manager:
 
         #err('for ant @', (ant.row, ant.col), directions)
 
-        return list(sorted(
-            directions.items(),
-            key = lambda x: x[1],
-            reverse = True,
-        ))
+        return directions
 
 class Ant:
     def __init__(self, game, row, col):
@@ -380,24 +323,46 @@ class Ant:
         self.hill = None
 
         self.i_wont_move = False
+        self.considered_hold = False
+        self.considered_moves_dict = None
         self.considered_moves = None
         self.next_consideration = None
 
         self.considered_direction = None
         self.considered_position = None
         self.confidence = None
+        self.enemy_checks = 0
 
-    def make_turn(self):
+    def calculate_moves(self):
+        self.enemy_checks = 0
+        self.considered_hold = False
+        self.considered_moves_dict = self.manager.get_moves(self)
+
+    def consider_moves(self):
         self.i_wont_move = False
-
-        self.considered_moves = self.manager.get_moves(self)
-
         self.next_consideration = 0
+
+        minimum = min(self.considered_moves_dict.values())
+        if minimum < 0:
+            self.considered_moves = list(sorted(
+                (
+                    (direction, value-minimum)
+                    for direction, value in self.considered_moves_dict.items()
+                ),
+                key = lambda x: x[1],
+                reverse = True,
+            ))
+        else:
+            self.considered_moves = list(sorted(
+                self.considered_moves_dict.items(),
+                key = lambda x: x[1],
+                reverse = True,
+            ))
         self.reconsider_move()
 
     def reconsider_move(self):
         while True:
-            if self.next_consideration >= len(self.considered_moves):
+            if self.considered_hold or self.next_consideration >= len(self.considered_moves):
                 self.considered_direction, self.considered_position, self.confidence = -1, (self.row, self.col), 0
                 self.i_wont_move = True
                 pos = self.row, self.col

@@ -3,6 +3,7 @@
 import collections
 import math
 import random
+import time
 
 from . import cstuff
 from .map import (
@@ -61,6 +62,8 @@ class Game:
 
         self.strategies = None
 
+        self.start_time = None
+
     def init(self):
         random.seed(self.player_seed)
         self.water_map = Map(self.rows, self.cols)
@@ -95,49 +98,45 @@ class Game:
         rules = ants.SimpleRulesStrategy(self)
 
         self.managers_attackers = (
-            (5, ants.Manager(
+            #(5, ants.Manager(
+            #    'attacker',
+            #    (0.05, rand),
+            #    (3, target),
+            #    (0.4, explo),
+            #    (0.3, periphery),
+            #    (1.4, hill),
+            #    (1, rules),
+            #    (0.1, group),
+            #)),
+            (11, ants.Manager(
                 'attacker',
                 (0.05, rand),
                 (3, target),
                 (0.4, explo),
                 (0.3, periphery),
-                (5, focus),
-                (1.4, hill),
-                (1, rules),
-                (0.1, group),
-            )),
-            (6, ants.Manager(
-                'attacker',
-                (0.05, rand),
-                (3, target),
-                (0.4, explo),
-                (0.3, periphery),
-                (5, focus),
                 (1.4, hill),
                 (1, rules),
                 (0.1, repell),
             )),
         )
         self.managers_explorers = (
-            (1, ants.Manager(
+            (5, ants.Manager(
                 'explorer',
                 (0.05, rand),
                 (3, target),
                 (0.5, explo),
                 (0.3, periphery),
-                (5, focus),
                 (0.6, hill2),
                 (1, rules),
                 (0.1, repell),
             )),
         )
-        self.explorer_expand = 4
+        self.explorer_expand = 3
         self.manager_defender = ants.Manager(
             'defender',
             (0.05, rand),
             (2, target),
             (0.3, guard),
-            (1, focus),
             (1, rules),
         )
 
@@ -148,9 +147,14 @@ class Game:
 
     def turn_begin(self, turn):
         self.turn = turn
-        #err('turn', turn)
+        err('turn', turn)
+
+    def time_remaining(self):
+        return self.turntime - (time.time() - self.start_time)
 
     def turn_end(self):
+        self.start_time = time.time()
+
         my_ants = set(self.my_ants)
         dead_ants = my_ants - self.received_ants
         for ant in dead_ants:
@@ -228,7 +232,23 @@ class Game:
                 self.check_food(target)
 
         for ant in self.my_ants.values():
-            ant.make_turn()
+            ant.calculate_moves()
+
+        err('time', self.time_remaining(), self.turntime)
+        iterations = 0
+        duration = 0
+        while True:
+            ctime = time.time()
+            if not self.solve_moves():
+                err('No more calculations to be made after', iterations, 'iterations')
+                break
+            duration = max(time.time()-ctime, duration)
+            if self.time_remaining() - duration < 0.01: # leave at least 10ms for response and moving ants
+                err('Breaking after', iterations, 'iterations, with max solving time', duration, 'because what is left is', self.time_remaining())
+                break
+            iterations += 1
+            err('iteration', iterations)
+        err('time', self.time_remaining(), self.turntime)
 
         new_ants = dict()
         for ant in self.my_ants.values():
@@ -236,7 +256,7 @@ class Game:
             new_ants[pos] = ant
             if ant.i_wont_move:
                 continue
-            #err((ant.row,ant.col), '→', pos, 'dir', direction, DIR_N2C[direction], ant.manager.name, ant.confidence)
+            err((ant.row,ant.col), '→', pos, 'dir', direction, DIR_N2C[direction], ant.manager.name, ant.confidence, ant.considered_moves)
             print('o %s %s %s' % (ant.row, ant.col, DIR_N2C[direction]))
             ant.row, ant.col = pos
         assert len(self.my_ants) == len(new_ants)
@@ -250,6 +270,74 @@ class Game:
         self.received_food.clear()
         self.enemy_ants.clear()
         self.occupied.clear()
+
+    def solve_moves(self):
+        changes_made = False
+
+        for ant in self.my_ants.values():
+            ant.consider_moves()
+
+        new_ants = dict(
+            (ant.considered_position, ant)
+            for ant in self.my_ants.values()
+        )
+
+        search_radius = self.attackradius2 * 9
+        attack_radius = self.attackradius2
+        offsets = ((-1, 0, 0), (0, -1, 0), (1, 0, 1), (2, 1, 0), (3, 0, -1)) 
+
+        for apos, ant in new_ants.items():
+            ant.enemy_checks += 1
+            if ant.i_wont_move or ant.enemy_checks > 5:
+                continue
+            arow, acol = apos
+            apos2 = ant.row, ant.col
+            all_enemy_ants_nearby = list(self.vector_ants(apos, self.enemy_ants.items(), search_radius, True))
+            if not all_enemy_ants_nearby:
+                continue
+            #err(len(all_enemy_ants_nearby), 'enemies nearby ant', apos)
+            all_my_ants_nearby = list(self.vector_ants(apos, ((pos, 0) for pos in new_ants), search_radius, True))
+
+            kills_enemy, kills_self = False, False
+            kills_count = 0
+            for enemy_direction, enemy_or, enemy_oc in offsets:
+                all_ants = [
+                    x
+                    for y in (
+                        (
+                            ((row+enemy_or, col+enemy_oc), owner)
+                            for (row, col), owner in all_enemy_ants_nearby
+                        ),
+                        all_my_ants_nearby,
+                    )
+                    for x in y
+                ]
+                #err(apos, ant.considered_direction, enemy_direction, enemy_or, enemy_oc, all_ants)
+                my_enemies = list(self.vector_ants((0, 0), all_ants, attack_radius, True, 0))
+                if not my_enemies:
+                    continue
+                min_enemy_weakness = min(
+                    len(list(self.vector_ants(pos, all_ants, attack_radius, False, ant)))
+                    for pos, ant in my_enemies
+                )
+                my_weakness = len(my_enemies)
+                dont_go = False
+                err(my_weakness, 'possible enemies moving', enemy_direction, 'around ant', apos2, 'after moving to', apos, 'with minimal weakness', min_enemy_weakness)
+                #if min_enemy_weakness == my_weakness:
+                #    if enemy_direction == -1:
+                #        ant.considered_hold = True
+                #        break
+                if min_enemy_weakness <= my_weakness:
+                    #ant.considered_hold = False
+                    dont_go = True
+
+                if dont_go:
+                    err('I may be killed, not going', ant.considered_direction)
+                    ant.considered_moves_dict[ant.considered_direction] -= 5
+                    changes_made = True
+                    break
+
+        return changes_made
 
     def set_water(self, row, col):
         self.water_map.set(row, col)
@@ -405,31 +493,13 @@ class Game:
         #food_map.debug_print()
 
     def vector_ants(self, apos, ants, limit2=None, normal_output=False, exclude=None):
-        gr = self.rows
-        gc = self.cols
-        gr2 = gr / 2
-        gc2 = gc/ 2
         ra, ca = apos
         for pos, ant in ants:
             if ant == exclude:
                 continue
-            ir, ic = pos
 
-            ir -= ra
-            if abs(ir) > gr2:
-                if ir > 0:
-                    ir -= gr
-                else:
-                    ir += gr
+            distance, ir, ic = cstuff.vector_ants_speedup(ra, ca, pos)
 
-            ic -= ca
-            if abs(ic) > gc2:
-                if ic > 0:
-                    ic -= gc
-                else:
-                    ic += gc
-
-            distance = ir**2 + ic**2
             if limit2 and distance > limit2:
                 continue
 

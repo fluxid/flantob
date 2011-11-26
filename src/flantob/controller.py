@@ -49,7 +49,7 @@ class Controller:
         self.game.loadtime = int(loadtime)
 
     def action_begin_turntime(self, loadtime):
-        self.game.turntime = int(loadtime)
+        self.game.turntime = int(loadtime) / 1000.0
 
     def action_begin_rows(self, rows):
         self.game.rows = int(rows)

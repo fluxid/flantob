@@ -183,6 +183,33 @@ static PyObject* cstuff_find_low_density_blobs(PyObject *self, PyObject *args) {
 	return list1;
 }
 
+static PyObject* cstuff_vector_ants_speedup(PyObject *self, PyObject *args) {
+	int ra, ca, ir, ic;
+	if (!PyArg_ParseTuple(args, "ii(ii)", &ra, &ca, &ir, &ic)) {
+		return NULL;
+	}
+
+	ir -= ra;
+	if (abs(ir) > g_rows/2) {
+		if (ir > 0) {
+			ir -= g_rows;
+		} else {
+			ir += g_rows;
+		}
+	}
+
+	ic -= ca;
+	if (abs(ic) > g_cols/2) {
+		if (ic > 0) {
+			ic -= g_cols;
+		} else {
+			ic += g_cols;
+		}
+	}
+
+	return Py_BuildValue("iii", ((ir*ir)+(ic*ic)), ir, ic);
+}
+
 static PyObject* cstuff_init(PyObject *self, PyObject *args) {
 	int rows, cols, densityradius2;
 
@@ -202,6 +229,7 @@ static PyObject* cstuff_init(PyObject *self, PyObject *args) {
 static PyMethodDef cstuff_methods[] = {
 	{"init",  cstuff_init, METH_VARARGS, ""},
 	{"find_low_density_blobs", cstuff_find_low_density_blobs, METH_VARARGS, ""},
+	{"vector_ants_speedup", cstuff_vector_ants_speedup, METH_VARARGS, ""},
 	{NULL, NULL, 0, NULL}
 };
 
