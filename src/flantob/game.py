@@ -70,7 +70,7 @@ class Game:
         self.seen_map = Map(self.rows, self.cols)
         self.area = float(self.rows * self.cols)
 
-        cstuff.init(self.rows, self.cols, self.viewradius2)
+        cstuff.init(self.rows, self.cols, self.viewradius2, self.attackradius2, 2.0)
         
         mxf = math.sqrt(self.viewradius2)
         mx = self.mx = int(mxf)
@@ -94,7 +94,6 @@ class Game:
         guard = ants.MyHillGuardStrategy(self, refresh=5, limit = mx2*3)
         repell = ants.RepellOwnStrategy(self)
         group = ants.GroupOwnStrategy(self)
-        focus = ants.FocusStrategy(self)
         rules = ants.SimpleRulesStrategy(self)
 
         self.managers_attackers = (
