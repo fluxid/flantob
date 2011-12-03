@@ -7,8 +7,8 @@ import time
 
 from . import cstuff
 from .map import (
-    DirectionMap,
     Map,
+    direction_map_edge_prefill,
 )
 from . import ants
 
@@ -36,6 +36,11 @@ class Game:
         self.visible_map = None
         self.vision_map = None
 
+        self.dmap_exploration = None
+        self.dmap_periphery = None
+        self.dmap_my_hills = None
+        self.dmap_enemy_hills = None
+
         self.area = 1
         self.area_visible = 0
 
@@ -59,6 +64,7 @@ class Game:
 
         self.food_targeters = dict()
         self.food_maps = dict()
+        self.cached_dmaps = list()
 
         self.strategies = None
 
@@ -70,7 +76,12 @@ class Game:
         self.seen_map = Map(self.rows, self.cols)
         self.area = float(self.rows * self.cols)
 
-        cstuff.init(self.rows, self.cols, self.viewradius2, self.attackradius2, 2.0)
+        cstuff.init(self.rows, self.cols, self.viewradius2, 12, 0.3)
+
+        self.dmap_exploration = cstuff.DirectionMap()
+        self.dmap_periphery = cstuff.DirectionMap()
+        self.dmap_my_hills = cstuff.DirectionMap()
+        self.dmap_enemy_hills = cstuff.DirectionMap()
         
         mxf = math.sqrt(self.viewradius2)
         mx = self.mx = int(mxf)
@@ -84,14 +95,15 @@ class Game:
                     self.vision_map.set(row+mx, col+mx)
     
         rand = ants.RandomStrategy(self)
-        explo = ants.ExplorerStrategy(self)
-        periphery = ants.PeripheryStrategy(self)
+        explo = ants.AutoDirectedStrategy(self, self.dmap_exploration)
+        explo2 = ants.AutoDirectedStrategy(self, self.dmap_exploration, limit=mx2)
+        periphery = ants.AutoDirectedStrategy(self, self.dmap_periphery)
         target = ants.TargetFoodStrategy(self)
 
-        hill = ants.HillStrategy(self)
-        hill2 = ants.HillStrategy(self, limit = mx2)
+        hill = ants.AutoDirectedStrategy(self, self.dmap_enemy_hills)
+        hill2 = ants.AutoDirectedStrategy(self, self.dmap_enemy_hills, limit=mx2)
 
-        guard = ants.MyHillGuardStrategy(self, refresh=5, limit = mx2*3)
+        guard = ants.MyHillGuardStrategy(self, limit = mx2*3)
         repell = ants.RepellOwnStrategy(self)
         group = ants.GroupOwnStrategy(self)
         rules = ants.SimpleRulesStrategy(self)
@@ -115,22 +127,21 @@ class Game:
                 (0.3, periphery),
                 (1.4, hill),
                 (1, rules),
-                (0.1, repell),
+                #(0.1, repell),
             )),
         )
         self.managers_explorers = (
-            (5, ants.Manager(
-                'explorer',
+            (8, ants.Manager(
+                'explorer2',
                 (0.05, rand),
                 (3, target),
-                (0.5, explo),
+                (0.5, explo2),
                 (0.3, periphery),
                 (0.6, hill2),
                 (1, rules),
                 (0.1, repell),
             )),
         )
-        self.explorer_expand = 3
         self.manager_defender = ants.Manager(
             'defender',
             (0.05, rand),
@@ -141,8 +152,6 @@ class Game:
 
     def clear_temporary_state(self):
         pass
-
-    # Functions for controller
 
     def turn_begin(self, turn):
         self.turn = turn
@@ -184,17 +193,13 @@ class Game:
         #        if value != -2:
         #            print('v tile %s %s'%(row, col))
 
-        self.area_visible = sum(-x-1 for stride in self.visible_map.strides for x in stride) / self.area
-        #err('visible map')
-        #self.visible_map.debug_print()
-        #err('seen map')
-        #self.seen_map.debug_print()
-
+        before = len(self.my_hills)
         invisible = self.my_hills - self.received_my_hills
         for pos in invisible:
             if pos in self.visible_map:
                 self.my_hills.remove(pos)
         self.my_hills.update(self.received_my_hills)
+        lost_all_my_hills = before and not self.my_hills
 
         invisible = self.enemy_hills - self.received_enemy_hills
         for pos in invisible:
@@ -202,12 +207,39 @@ class Game:
                 self.enemy_hills.remove(pos)
         self.enemy_hills.update(self.received_enemy_hills)
 
+        cstuff.do_ant_stuff(self.my_ants)
+
+        #if self.turns
+
+        self.dmap_exploration.clear()
+        self.dmap_exploration.set_walls(self.seen_map.strides, -1)
+        self.dmap_exploration.set_walls(self.water_map.strides, -2)
+        self.dmap_exploration.fill_near(self.seen_map.direction_map_edge_prefill(), -1) 
+
+        self.dmap_periphery.clear()
+        density_map = cstuff.find_low_density_blobs(self.my_ants, self.water_map.strides)
+        self.dmap_periphery.set_walls(density_map, -1)
+        self.dmap_periphery.set_walls(self.water_map.strides, -2)
+        self.dmap_periphery.fill(direction_map_edge_prefill(density_map, self.rows, self.cols), -1) 
+
+        self.dmap_my_hills.clear()
+        self.dmap_my_hills.set_walls(self.water_map.strides, -2)
+        self.dmap_my_hills.fill(self.my_hills, -1) 
+
+        self.dmap_enemy_hills.clear()
+        self.dmap_enemy_hills.set_walls(self.water_map.strides, -2)
+        self.dmap_enemy_hills.fill_near(self.enemy_hills, -1) 
+
         if self.my_hills:
             invisible = self.food - self.received_food
             for pos in invisible:
                 if pos in self.visible_map:
                     #err('removing food', pos)
                     self.food.remove(pos)
+                    dmap = self.food_maps.pop(pos, None)
+                    if dmap:
+                        dmap, _ = dmap
+                        self.cached_dmaps.append(dmap)
                     targeter = self.food_targeters.pop(pos, None)
                     if targeter:
                         targeter.target = None
@@ -223,31 +255,33 @@ class Game:
             )
             if to_regen:
                 target, age = to_regen[0]
-                #err('has', len(to_regen), 'maps, regen map for food at', target, 'created', self.turn-age, 'turns ago')
-                food_map = DirectionMap((target,), self.water_map.direction_map_init(), self.mx2*2)
-                self.food_maps[target] = food_map, self.turn
+                if age != self.turn:
+                    #err('has', len(to_regen), 'maps, regen map for food at', target, 'created', self.turn-age, 'turns ago')
+                    self.get_food_map(target, True)
 
             for target in self.food:
                 self.check_food(target)
+        elif lost_all_my_hills:
+            err("I've just lost ALL MY HILLS")
 
         for ant in self.my_ants.values():
             ant.calculate_moves()
 
-        err('time', self.time_remaining(), self.turntime)
         iterations = 0
         duration = 0
+        enemy_cache = dict()
+        self.occupied.clear()
         while True:
             ctime = time.time()
-            if not self.solve_moves():
-                err('No more calculations to be made after', iterations, 'iterations')
+            if not self.solve_moves(enemy_cache):
+                #err('No more calculations to be made after', iterations, 'iterations')
                 break
             duration = max(time.time()-ctime, duration)
             if self.time_remaining() - duration < 0.01: # leave at least 10ms for response and moving ants
-                err('Breaking after', iterations, 'iterations, with max solving time', duration, 'because what is left is', self.time_remaining())
+                #err('Breaking after', iterations, 'iterations, with max solving time', duration, 'because what is left is', self.time_remaining())
                 break
             iterations += 1
-            err('iteration', iterations)
-        err('time', self.time_remaining(), self.turntime)
+            #err('iteration', iterations)
 
         new_ants = dict()
         for ant in self.my_ants.values():
@@ -255,10 +289,10 @@ class Game:
             new_ants[pos] = ant
             if ant.i_wont_move:
                 continue
-            err((ant.row,ant.col), '→', pos, 'dir', direction, DIR_N2C[direction], ant.manager.name, ant.confidence, ant.considered_moves)
+            #err((ant.row,ant.col), '→', pos, 'dir', direction, DIR_N2C[direction], ant.manager.name, ant.confidence, ant.considered_moves)
             print('o %s %s %s' % (ant.row, ant.col, DIR_N2C[direction]))
             ant.row, ant.col = pos
-        assert len(self.my_ants) == len(new_ants)
+        #assert len(self.my_ants) == len(new_ants)
         self.my_ants = new_ants
 
         print('go')
@@ -270,7 +304,7 @@ class Game:
         self.enemy_ants.clear()
         self.occupied.clear()
 
-    def solve_moves(self):
+    def solve_moves(self, enemy_cache):
         changes_made = False
 
         for ant in self.my_ants.values():
@@ -291,7 +325,10 @@ class Game:
                 continue
             arow, acol = apos
             apos2 = ant.row, ant.col
-            all_enemy_ants_nearby = list(self.vector_ants(apos, self.enemy_ants.items(), search_radius, True))
+            all_enemy_ants_nearby = enemy_cache.get(apos)
+            if all_enemy_ants_nearby is None:
+                all_enemy_ants_nearby = list(self.vector_ants(apos, self.enemy_ants.items(), search_radius, True))
+                enemy_cache[apos] = all_enemy_ants_nearby
             if not all_enemy_ants_nearby:
                 continue
             #err(len(all_enemy_ants_nearby), 'enemies nearby ant', apos)
@@ -321,7 +358,7 @@ class Game:
                 )
                 my_weakness = len(my_enemies)
                 dont_go = False
-                err(my_weakness, 'possible enemies moving', enemy_direction, 'around ant', apos2, 'after moving to', apos, 'with minimal weakness', min_enemy_weakness)
+                #err(my_weakness, 'possible enemies moving', enemy_direction, 'around ant', apos2, 'after moving to', apos, 'with minimal weakness', min_enemy_weakness)
                 #if min_enemy_weakness == my_weakness:
                 #    if enemy_direction == -1:
                 #        ant.considered_hold = True
@@ -331,7 +368,7 @@ class Game:
                     dont_go = True
 
                 if dont_go:
-                    err('I may be killed, not going', ant.considered_direction)
+                    #err('I may be killed, not going', ant.considered_direction)
                     ant.considered_moves_dict[ant.considered_direction] -= 5
                     changes_made = True
                     break
@@ -404,16 +441,17 @@ class Game:
 
         # less explorers if much of map is visible
         manager_list = list(self.managers_attackers)
-        expand = self.explorer_expand * (1-self.area_visible)
-        manager_list.extend(
-            (x+expand, y)
-            for x, y in self.managers_explorers
-        )
+        manager_list.extend(self.managers_explorers)
+        #expand = self.explorer_expand * (1-self.area_visible)
+        #manager_list.extend(
+        #    (x+expand, y)
+        #    for x, y in self.managers_explorers
+        #)
         #err(self.turn, expand)
         #manager_list = self.managers_explorers + self.managers_attackers
-        if self.turn > 40 and self.my_hills and pos in self.my_hills and self.hill_guards.get(pos, 0) < 4:
+        if self.turn > 40 and self.my_hills and pos in self.my_hills and self.hill_guards.get(pos, 0) < 7:
             # 50% chance
-            manager_list.append((sum(x for x, y in manager_list), self.manager_defender))
+            manager_list.append((sum(x for x, y in manager_list)/2, self.manager_defender))
             #manager_list += ((sum(x for x, y in manager_list), self.manager_defender),)
 
         s = float(sum(x for x, y in manager_list))
@@ -432,17 +470,23 @@ class Game:
 
     def get_food_map(self, target, regen = False):
         food_map = self.food_maps.get(target)
-        if regen and food_map:
-            if food_map[1] != self.turn:
-                food_map = None
 
         if food_map:
-            #err('map to', target, 'is', self.turn-food_map[1], 'turns old')
-            return food_map[0]
+            if not (regen and food_map[1] != self.turn):
+                #err('map to', target, 'is', self.turn-food_map[1], 'turns old')
+                return food_map[0]
+            dmap, _ = food_map
+        else:
+            if self.cached_dmaps:
+                dmap = self.cached_dmaps.pop(0)
+            else:
+                dmap = cstuff.DirectionMap()
 
-        food_map = DirectionMap((target,), self.water_map.direction_map_init(), self.mx2*2)
-        self.food_maps[target] = food_map, self.turn
-        return food_map
+        dmap.clear()
+        dmap.set_walls(self.water_map.strides, -2)
+        dmap.fill((target,), self.mx2*2)
+        self.food_maps[target] = dmap, self.turn
+        return dmap
 
     def check_food(self, target):
         food_map = self.get_food_map(target)
@@ -462,26 +506,32 @@ class Game:
 
             tmp_distance = food_map.get_pos(pos)
             if tmp_distance < 0 or distance and tmp_distance >= distance:
+                #err('ant', pos, 'is too far away')
                 continue
 
             if ant.target:
                 current_distance = self.food_maps[ant.target][0].get_pos((ant.row, ant.col))
                 if current_distance <= tmp_distance:
+                    #err('ant', pos, 'is closer to its current target', ant.target, 'distance', current_distance, '<=', tmp_distance)
                     continue
             distance = tmp_distance
             possible_targeter = ant
 
         ant = possible_targeter
         if not ant:
+            #err('No ant available')
             return
 
         if ant == original:
+            #err('Same ant found as targetter')
             return
 
         if ant.target and ant.target != target:
+            #err('switching ant target')
             del self.food_targeters[ant.target]
 
         if original:
+            #err('switching targetter')
             del self.food_targeters[original.target]
             original.target = None
 

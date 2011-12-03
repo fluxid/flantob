@@ -10,7 +10,8 @@ RE_SP = re.compile('\s+')
 
 
 class Controller:
-    def __init__(self):
+    def __init__(self, filename):
+        self.filename = filename
         self.game = None
         self.state = None
 
@@ -18,32 +19,37 @@ class Controller:
         self.game = Game()
 
         sdict = self.states.get('begin')
-        while True:
-            try:
-                line = sys.stdin.readline()
-            except EOFError:
-                break
-            line = line.strip()
-            if not line:
-                continue
-            #err(line)
-            args = RE_SP.split(line)
-            command = args.pop(0)
+        if self.filename:
+            fp = open(self.filename, 'r')
+        else:
+            fp = sys.stdin
 
-            command = sdict.get(command)
-            if not command:
-                continue
+        try:
+            for line in fp:
+                line = line.strip()
+                if not line:
+                    continue
+                err(line)
+                args = RE_SP.split(line)
+                command = args.pop(0)
 
-            state = command(self, *args)
-            sys.stdout.flush()
-            if state == 'quit':
-                #err('quitting')
-                sys.exit(0)
-                break
-            if state:
-                sdict = self.states.get(state)
-                if sdict is None:
-                    raise RuntimeError('Unknown state: %s' % state)
+                command = sdict.get(command)
+                if not command:
+                    continue
+
+                state = command(self, *args)
+                sys.stdout.flush()
+                if state == 'quit':
+                    #err('quitting')
+                    sys.exit(0)
+                    break
+                if state:
+                    sdict = self.states.get(state)
+                    if sdict is None:
+                        raise RuntimeError('Unknown state: %s' % state)
+        finally:
+            if self.filename:
+                fp.close()
 
     def action_begin_loadtime(self, loadtime):
         self.game.loadtime = int(loadtime)
@@ -102,8 +108,8 @@ class Controller:
         self.game.set_dead_ant(int(row), int(col), int(owner))
  
     def action_turn_go(self):
-        #with timer('turn'):
-        self.game.turn_end()
+        with timer('turn'):
+            self.game.turn_end()
         return 'turns'
 
  

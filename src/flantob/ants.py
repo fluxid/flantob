@@ -5,7 +5,6 @@ import math
 import random
 
 from . import cstuff
-from .map import DirectionMap, direction_map_edge_prefill
 
 class Strategy:
     def __init__(self, game):
@@ -47,171 +46,67 @@ class SimpleRulesStrategy(Strategy):
                     yield -10, direction
 
 class DirectedStrategy(Strategy):
-    inverted = False
-    def hit_water(self, ant, direction):
+    def __init__(self, game, limit=None, *args, **kwargs):
+        super().__init__(game, *args, **kwargs)
+        self.limit = limit
+
+    def get_pos(self, pos, dmap):
+        return dmap.get_pos(pos)
+
+    def hit_water(self, ant):
         pass
 
-    def get_directions(self, ant, direction_map):
+    def get_directions(self, ant, dmap):
+        limit = self.limit
+        hit_water  = False
+
         row, col = ant.row, ant.col
-        value = direction_map.get_pos((row, col))
-        queue = collections.deque()
+        value = self.get_pos((row, col), dmap)
+        if value < 0 or (limit and value > limit):
+            return
 
         for k in range(4):
             pos = self.game.translate(k, row, col)
-            value2 = direction_map.get_pos(pos)
-            if value2 < 0:
+            value2 = self.get_pos(pos, dmap)
+            if value2 < 0 or (limit and value2 > limit):
                 continue
+
             if self.game.water_map.get(pos):
-                self.hit_water(ant, direction_map)
+                if not hit_water:
+                    self.hit_water(ant)
+                hit_water = True
                 continue
-            queue.append((value2, k))
 
-        if not queue:
-            return
-
-        mmin = min(x for x, y in queue)
-        mmax = max(x for x, y in queue)
-        if value < 0:
-            value = mmax
-        if mmax == mmin:
-            mmax = 1.0
-        else:
-            mmax = float(mmax - mmin)
-
-        inverted = self.inverted
-
-        for value2, direction in queue:
-            if not inverted and (value > value2) or inverted and (value2 > value):
-                yield 1, direction
-            elif value == value2:
-                yield 0.5, direction
-            else:
-                yield 0.1, direction
+            if value > value2:
+                yield 1, k
 
 class AutoDirectedStrategy(DirectedStrategy):
-    def __init__(self, game, backup = None, limit = None, refresh = None, offset = 0, *args, **kwargs):
+    def __init__(self, game, dmap, limit=None, *args, **kwargs):
         super().__init__(game, *args, **kwargs)
-        self.last_gen = game.turn
-        self.direction_map = None
+        self.dmap = dmap
         self.limit = limit
-        if refresh and refresh < 2:
-            refresh = None
-        self.refresh = refresh
-        self.offset = offset
 
-    def map_preinit(self):
+    def get_pos(self, pos, dmap):
+        return dmap.get_pos(pos)
+
+    def hit_water(self, ant):
         pass
 
-    def map_prefill(self):
-        raise NotImplementedError
-
-    def map_init(self):
-        raise NotImplementedError
-
-    def make_map(self):
-        self.map_preinit()
-        self.direction_map = DirectionMap(self.map_prefill(), init = self.map_init(), limit = self.limit)
-
     def instruct_ant(self, ant):
-        if not self.direction_map or self.last_gen < self.game.turn and (not self.refresh or (self.game.turn + self.offset)%self.refresh):
-            self.last_gen = self.game.turn
-            self.make_map()
-            #err(self, self.limit)
-            #self.direction_map.debug_print()
-        elif not self.direction_map.ready:
-            self.direction_map.resume()
-        #err(self)
-        #self.direction_map.debug_print()
+        return self.get_directions(ant, self.dmap)
 
-        return self.get_directions(ant, self.direction_map)
-
-class ExplorerStrategy(AutoDirectedStrategy):
-    def map_prefill(self):
-        return self.game.seen_map.direction_map_edge_prefill()
-
-    def map_init(self):
-        return [
-            [
-                (-2 if (cell1 == -1 or cell2 == -2) else -1)
-                for cell1, cell2 in zip(row1, row2)
-            ]
-            for row1, row2 in zip(self.game.seen_map.strides, self.game.water_map.strides)
-        ]
-
-class PeripheryStrategy(AutoDirectedStrategy):
-    def map_preinit(self):
-        gomap = self.gomap = cstuff.find_low_density_blobs(self.game.my_ants, self.game.water_map.strides)
-        #print('v setFillColor 255 255 255 0.3')
-        #for row, stride in enumerate(gomap):
-        #    for col, value in enumerate(stride):
-        #        if value == -1:
-        #            print('v tile %s %s'%(row, col))
-
-    def map_prefill(self):
-        return direction_map_edge_prefill(self.gomap)
-        #return self.game.visible_map.direction_map_edge_prefill()
-
-    def map_init(self):
-        return [
-            [
-                (-2 if (cell1 == -1 or cell2 == -2) else -1)
-                for cell1, cell2 in zip(row1, row2)
-            ]
-            for row1, row2 in zip(self.gomap, self.game.water_map.strides)
-        ]
-
-    def make_map(self):
-        r = super().make_map()
-        #gc = None
-        #def ccc(cc):
-        #    nonlocal gc
-        #    if cc != gc:
-        #        print('v setFillColor ' + cc)
-        #        gc = cc
-        #for row, stride in enumerate(self.direction_map.strides):
-        #    for col, value in enumerate(stride):
-        #        if value == -1:
-        #            continue
-        #        elif value == -2:
-        #            continue
-        #            ccc('0 0 255 0.3')
-        #        else:
-        #            x = 1.0 - (value/10.0)
-        #            if x<=0:
-        #                continue
-        #            ccc('255 255 255 %.2f'%x)
-        #        print('v tile %s %s'%(row, col))
-        return r
-
-class FoodStrategy(AutoDirectedStrategy):
-    def map_prefill(self):
-        return self.game.food
-
-    def map_init(self):
-        return self.game.water_map.direction_map_init()
-
-class HillStrategy(AutoDirectedStrategy):
-    def map_prefill(self):
-        return self.game.enemy_hills
-
-    def map_init(self):
-        return self.game.water_map.direction_map_init()
-
-class MyHillGuardStrategy(AutoDirectedStrategy):
-    def get_pos(self, pos, direction_map):
-        value = direction_map.get_pos(pos)
+class MyHillGuardStrategy(DirectedStrategy):
+    def get_pos(self, pos, dmap):
+        value = dmap.get_pos(pos)
         if value <= 2:
             return 2 - value
         return value - 2
 
-    def map_prefill(self):
-        return self.game.my_hills
+    def instruct_ant(self, ant):
+        return self.get_directions(ant, self.game.dmap_my_hills)
 
-    def map_init(self):
-        return self.game.water_map.direction_map_init()
-
-class TargetFoodStrategy(AutoDirectedStrategy):
-    def hit_water(self, ant, direction):
+class TargetFoodStrategy(DirectedStrategy):
+    def hit_water(self, ant):
         #err('ant', (ant.row, ant.col), 'hit water when trying to reach', ant.target, 'reloading map')
         self.game.get_food_map(ant.target, True)
 
@@ -223,7 +118,7 @@ class TargetFoodStrategy(AutoDirectedStrategy):
         if ant.turns_left:
             ant.turns_left -= 1
             if not ant.turns_left:
-                #err('ant', (ant.row, ant.col), 'has not runs left to reach target', target)
+                #err('ant', (ant.row, ant.col), 'has no runs left to reach target', target)
                 ant.target = None
                 del self.game.food_targeters[target]
 

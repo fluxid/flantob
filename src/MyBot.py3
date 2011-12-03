@@ -6,6 +6,12 @@ import time
 
 if __name__ == '__main__':
     import sys
+    args = sys.argv[1:]
+    if args:
+        filename = args.pop()
+    else:
+        filename = None
+
     def err(*args):
         print(*args, file=sys.stderr)
         sys.stderr.flush()
@@ -25,5 +31,5 @@ if __name__ == '__main__':
     else:
         __builtins__.err = err
         __builtins__.timer = timer
-    controller = Controller()
+    controller = Controller(filename)
     controller.run()

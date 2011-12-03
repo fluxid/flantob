@@ -3,6 +3,8 @@
 from collections import deque
 from copy import deepcopy
 
+from . import cstuff
+
 class Map:
     '''
     -1 empty
@@ -51,13 +53,13 @@ class Map:
         return [list(stride) for stride in self.strides]
 
     def direction_map_edge_prefill(self):
-        return direction_map_edge_prefill(self.strides)
+        return direction_map_edge_prefill(self.strides, self.rows, self.cols)
 
     def debug_print(self):
         for stride in self.strides:
             err(' '.join(('#' if (cell == -2) else '.') for cell in stride))
 
-def direction_map_edge_prefill(strides):
+def direction_map_edge_prefill(strides, rows, cols):
     last_stride = strides[-1]
     for row, stride in enumerate(strides):
         last_cell = stride[-1] == -2
@@ -66,81 +68,13 @@ def direction_map_edge_prefill(strides):
             if cell and not last_cell:
                 yield (row, col)
             elif not cell and last_cell:
-                yield (row, col-1)
+                yield (row, (col-1)%cols)
             else:
                 last_cell = last_stride[col] == -2
                 if cell and not last_cell:
                     yield (row, col)
                 elif not cell and last_cell:
-                    yield (row-1, col)
+                    yield ((row-1)%rows, col)
             last_cell = cell
         last_stride = stride
-
-class DirectionMap:
-    def __init__(self, prefill, init, limit):
-        strides = self.strides = init
-        self.rows, self.cols = len(strides), len(strides[0])
-        prefill = set((row, col) for row, col in prefill if strides[row][col] != -2)
-        for row, col in prefill:
-            strides[row][col] = 0
-        self.queue = deque(prefill)
-        self.limit = limit
-        self.ready = False
-        self.resume()
-
-    def resume(self):
-        if self.ready:
-            return
-        queue = self.queue
-        strides = self.strides
-        rows, cols = self.rows, self.cols
-        while queue: #and podlicz czas:
-            row, col = queue.popleft()
-            stride = strides[row]
-            value = stride[col] + 1
-            if self.limit and value > self.limit:
-                continue
-
-            col2 = (col-1)%cols
-            if stride[col2] == -1:
-                self.queue.append((row, col2))
-                stride[col2] = value
-
-            col2 = (col+1)%cols
-            if stride[col2] == -1:
-                self.queue.append((row, col2))
-                stride[col2] = value
-
-            row2 = (row-1)%rows
-            stride = strides[row2]
-            if stride[col] == -1:
-                self.queue.append((row2, col))
-                stride[col] = value
-
-            row2 = (row+1)%rows
-            stride = strides[row2]
-            if stride[col] == -1:
-                self.queue.append((row2, col))
-                stride[col] = value
-
-        if not queue:
-            self.ready=True
-
-    def debug_print(self):
-        for stride in self.strides:
-            err(' '.join(('##' if cell == -2 else '__' if cell == -1 else '%2d'%cell) for cell in stride))
-        err()
-
-    def get_pos(self, pos):
-        row, col = pos
-        return self.strides[row][col]
-
-    def invert(self):
-        self.strides = [
-            [
-                (self.limit - cell if cell >= 0 else cell)
-                for cell in stride
-            ]
-            for stride in self.strides
-        ]
 
