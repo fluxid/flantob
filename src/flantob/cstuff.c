@@ -340,7 +340,7 @@ static PyObject* cstuff_DirectionMap_set_walls(cstuff_DirectionMap* self, PyObje
 	SETUP_ELEM(row_, col_, value_, pos_) \
 	if (!stack) { \
 		stack_bottom = stack = element; \
-	} else if (value_ > stack_bottom->value) { \
+	} else if (value_ >= stack_bottom->value) { \
 		stack_bottom->next = element; \
 		element->prev = stack_bottom; \
 		stack_bottom = element; \
@@ -421,6 +421,7 @@ static PyObject* cstuff_DirectionMap_fill(cstuff_DirectionMap* self, PyObject *a
 	while (stack) {
 		element = stack;
 		stack = element->next;
+		if (!stack) stack_bottom = NULL;
 		row = element->row;
 		col = element->col;
 		value = element->value;
@@ -454,15 +455,17 @@ static PyObject* cstuff_DirectionMap_fill(cstuff_DirectionMap* self, PyObject *a
 }
 
 static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObject *args) {
-	PyObject *iterator, *item, *obj;
+	PyObject *iterator, *item, *obj, *with_value_obj;
 	int row, col, row2, col2, stride, pos;
 	double value, value2, value3, limit;
+	int with_value, parse_result;
 
 	stack_element *element, *element2, *stack, *stack_bottom, **waiting;
 
-	if (!PyArg_ParseTuple(args, "Od", &obj, &limit)) {
+	if (!PyArg_ParseTuple(args, "OdO", &obj, &limit, &with_value_obj)) {
 		return NULL;
 	}
+	with_value = PyObject_IsTrue(with_value_obj) == 1;
 
 	iterator = PyObject_GetIter(obj);
 	if (iterator == NULL) {
@@ -477,16 +480,21 @@ static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObje
 
 	stack = NULL;
 	stack_bottom = NULL;
+	value = 0.0;
 
 	while ((item = PyIter_Next(iterator))) {
-		if (!PyArg_ParseTuple(item, "ii", &row, &col)) {
-			Py_DECREF(item);
+		if (with_value) {
+			parse_result = PyArg_ParseTuple(item, "iid", &row, &col, &value);
+		} else {
+			parse_result = PyArg_ParseTuple(item, "ii", &row, &col);
+		}
+		Py_DECREF(item);
+		if (!parse_result) {
 			Py_DECREF(iterator);
 			RESET_STACK;
 			free(waiting);
 			return NULL;
 		}
-		Py_DECREF(item);
 		if (row >= g_rows || col >= g_cols || row < 0 || col < 0) {
 			RAISE("Invalid input data - one of the targets is out od map bounds");
 			Py_DECREF(iterator);
@@ -494,7 +502,11 @@ static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObje
 			free(waiting);
 			return NULL;
 		}
-		PUT_NEW_ELEM_WAITING(row, col, 0.0, row*g_cols+col);
+		if (with_value) {
+			PUT_NEW_ELEM_SORTED(row, col, value, row*g_cols+col);
+		} else {
+			PUT_NEW_ELEM_WAITING(row, col, 0.0, row*g_cols+col);
+		}
 	}
 	Py_DECREF(iterator);
 
@@ -508,6 +520,8 @@ static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObje
 		stack = element->next;
 		if (stack) {
 			stack->prev = NULL;
+		} else {
+			stack_bottom = NULL;
 		}
 		row = element->row;
 		col = element->col;

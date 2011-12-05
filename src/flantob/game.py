@@ -40,6 +40,7 @@ class Game:
         self.dmap_periphery = None
         self.dmap_my_hills = None
         self.dmap_enemy_hills = None
+        self.dmap_defence_panic = None
 
         self.area = 1
         self.area_visible = 0
@@ -82,6 +83,7 @@ class Game:
         self.dmap_periphery = cstuff.DirectionMap()
         self.dmap_my_hills = cstuff.DirectionMap()
         self.dmap_enemy_hills = cstuff.DirectionMap()
+        self.dmap_defence_panic = cstuff.DirectionMap()
         
         mxf = math.sqrt(self.viewradius2)
         mx = self.mx = int(mxf)
@@ -104,6 +106,7 @@ class Game:
         hill2 = ants.AutoDirectedStrategy(self, self.dmap_enemy_hills, limit=mx2)
 
         guard = ants.MyHillGuardStrategy(self, limit = mx2*3)
+        panic = ants.AutoDirectedStrategy(self, self.dmap_defence_panic)
         repell = ants.RepellOwnStrategy(self)
         group = ants.GroupOwnStrategy(self)
         rules = ants.SimpleRulesStrategy(self)
@@ -123,6 +126,7 @@ class Game:
                 'attacker',
                 (0.05, rand),
                 (3, target),
+                (2, panic),
                 (0.4, explo),
                 (0.3, periphery),
                 (1.4, hill),
@@ -135,6 +139,7 @@ class Game:
                 'explorer2',
                 (0.05, rand),
                 (3, target),
+                (2, panic),
                 (0.5, explo2),
                 (0.3, periphery),
                 (0.6, hill2),
@@ -214,7 +219,7 @@ class Game:
         self.dmap_exploration.clear()
         self.dmap_exploration.set_walls(self.seen_map.strides, -1)
         self.dmap_exploration.set_walls(self.water_map.strides, -2)
-        self.dmap_exploration.fill_near(self.seen_map.direction_map_edge_prefill(), -1) 
+        self.dmap_exploration.fill_near(self.seen_map.direction_map_edge_prefill(), -1, False) 
 
         self.dmap_periphery.clear()
         density_map = cstuff.find_low_density_blobs(self.my_ants, self.water_map.strides)
@@ -228,7 +233,26 @@ class Game:
 
         self.dmap_enemy_hills.clear()
         self.dmap_enemy_hills.set_walls(self.water_map.strides, -2)
-        self.dmap_enemy_hills.fill_near(self.enemy_hills, -1) 
+        self.dmap_enemy_hills.fill_near(self.enemy_hills, -1, False) 
+
+        self.dmap_defence_panic.clear()
+        if self.enemy_ants:
+            attack_ants = [
+                (pos, distance)
+                for pos, distance in (
+                    (pos, self.dmap_my_hills.get_pos(pos))
+                    for pos in self.enemy_ants
+                )
+                if distance < 36
+            ]
+            if attack_ants:
+                min_distance = min(distance for _, distance in attack_ants)
+                self.dmap_defence_panic.set_walls(self.water_map.strides, -2)
+                self.dmap_defence_panic.fill_near((
+                    (row, col, (distance-min_distance)*1.2)
+                    for (row, col), distance in attack_ants
+                ), 50, True) 
+
 
         if self.my_hills:
             invisible = self.food - self.received_food
