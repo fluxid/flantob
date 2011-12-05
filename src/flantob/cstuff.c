@@ -3,6 +3,8 @@
 #include <stdio.h>
 #include <math.h>
 
+#include <sys/queue.h>
+
 static PyObject *CStuffError;
 
 #define RAISE(value) PyErr_SetString(CStuffError, value);
@@ -196,48 +198,15 @@ static int fade_maps(doublemap* map1, doublemap* map2, double amount) {
 	return 0;
 }
 
-typedef struct _stack_element {
-	int row;
-	int col;
-	struct _stack_element* prev;
-	struct _stack_element* next;
-	double value;
-} stack_element;
-
 typedef struct {
 	PyObject_HEAD
 	doublemap* map;
 	intmap* walls;
-	stack_element* free_elements;
 } cstuff_DirectionMap;
 
-static stack_element* get_stack_element(cstuff_DirectionMap* obj) {
-	int i;
-	stack_element *element;
-	if (obj->free_elements == NULL) {
-		for (i = 0; i<20; i++) {
-			element = (stack_element*)malloc(sizeof(stack_element));
-			if (!element) {
-				return NULL;
-			}
-			element->next = obj->free_elements;
-			obj->free_elements = element;
-		}
-	}
-	element = obj->free_elements;
-	obj->free_elements = element->next;
-	return element;
-}
-
 static void cstuff_DirectionMap_dealloc(cstuff_DirectionMap* self) {
-	stack_element* next;
 	free_doublemap(self->map);
 	free_intmap(self->walls);
-	next = self->free_elements;
-	while (next) {
-		next = next->next;
-		free(next);
-	}
 	Py_TYPE(self)->tp_free((PyObject*)self);
 }
 
@@ -246,7 +215,6 @@ static PyObject* cstuff_DirectionMap_new(PyTypeObject *type, PyObject *args, PyO
 	self = (cstuff_DirectionMap*)type->tp_alloc(type, 0);
 	self->map = create_doublemap(g_rows, g_cols);
 	self->walls = create_intmap(g_rows, g_cols);
-	self->free_elements = NULL;
 	return (PyObject*)self;
 }
 
@@ -297,69 +265,134 @@ static PyObject* cstuff_DirectionMap_set_walls(cstuff_DirectionMap* self, PyObje
 	Py_RETURN_NONE;
 }
 
-#define SETUP_ELEM(row_, col_, value_, pos_) \
-	element->row = row_; \
-	element->col = col_; \
-	element->value = value_; \
-	element->next = NULL; \
-	element->prev = NULL; \
-	self->map->values[pos_] = value_;
+typedef struct _entry_d {
+	TAILQ_ENTRY(_entry_d) hook;
+	int row;
+	int col;
+	double value;
+} entry_d;
 
-#define PUT_NEW_ELEM(row_, col_, value_, pos_) \
-	element = get_stack_element(self); \
-	SETUP_ELEM(row_, col_, value_, pos_) \
-	if (stack) { \
-		element->prev = stack_bottom; \
-		stack_bottom->next = element; \
-		stack_bottom = element; \
-	} else { \
-		stack_bottom = stack = element; \
+typedef struct _entry_s {
+	STAILQ_ENTRY(_entry_s) hook;
+	int row;
+	int col;
+	double value;
+} entry_s;
+
+typedef TAILQ_HEAD(_queue_d, _entry_d) queue_d;
+typedef STAILQ_HEAD(_queue_s, _entry_s) queue_s;
+
+queue_d free_entries_d = TAILQ_HEAD_INITIALIZER(free_entries_d);
+queue_s free_entries_s = STAILQ_HEAD_INITIALIZER(free_entries_s);
+
+static inline entry_d* get_entry_d(int row, int col, double value) {
+	int i;
+	entry_d *entry;
+	if (TAILQ_EMPTY(&free_entries_d)) {
+		for (i = 19; i>=0; i--) {
+			entry = (entry_d*)malloc(sizeof(entry_d));
+			if (!entry) return NULL;
+			if (i) TAILQ_INSERT_TAIL(&free_entries_d, entry, hook);
+		}
+	} else {
+		entry = TAILQ_FIRST(&free_entries_d);
+		TAILQ_REMOVE(&free_entries_d, entry, hook);
+	}
+	entry->row = row;
+	entry->col = col;
+	entry->value = value;
+	return entry;
+}
+
+static inline entry_s* get_entry_s(int row, int col, double value) {
+	int i;
+	entry_s *entry;
+	if (STAILQ_EMPTY(&free_entries_s)) {
+		for (i = 19; i>=0; i--) {
+			entry = (entry_s*)malloc(sizeof(entry_s));
+			if (!entry) return NULL;
+			if (i) STAILQ_INSERT_TAIL(&free_entries_s, entry, hook);
+		}
+	} else {
+		entry = STAILQ_FIRST(&free_entries_s);
+		STAILQ_REMOVE_HEAD(&free_entries_s, hook);
+	}
+	return entry;
+}
+
+static inline void put_entry_s(int row, int col, double value, size_t pos, queue_s *queue, cstuff_DirectionMap *obj) {
+	entry_s *entry;
+
+	entry = get_entry_s(row, col, value);
+
+	entry->row = row;
+	entry->col = col;
+	entry->value = value;
+	obj->map->values[pos] = value;
+
+	STAILQ_INSERT_TAIL(queue, entry, hook);
+}
+
+static inline void put_entry_d(int row, int col, double value, size_t pos, queue_d *queue, cstuff_DirectionMap *obj, entry_d **waiting) {
+	entry_d *entry;
+
+	entry = get_entry_d(row, col, value);
+
+	entry->row = row;
+	entry->col = col;
+	entry->value = value;
+	obj->map->values[pos] = value;
+	waiting[pos] = entry;
+
+	TAILQ_INSERT_TAIL(queue, entry, hook);
+}
+
+static inline void put_entry_d_sorted(int row, int col, double value, size_t pos, queue_d *queue, cstuff_DirectionMap *obj, entry_d **waiting) {
+	entry_d *entry, *entry2, *entry3;
+
+	entry = waiting[pos];
+	if (entry) {
+		TAILQ_REMOVE(queue, entry, hook);
+	} else {
+		entry = get_entry_d(row, col, value);
+		waiting[pos] = entry;
 	}
 
-#define PUT_NEW_ELEM_WAITING(row_, col_, value_, pos_) \
-	PUT_NEW_ELEM(row_, col_, value_, pos_) \
-	waiting[pos_] = element;
+	entry->row = row;
+	entry->col = col;
+	entry->value = value;
+	obj->map->values[pos] = value;
 
-#define PUT_NEW_ELEM_SORTED(row_, col_, value_, pos_) \
-	element = waiting[pos_]; \
-	if (element) { \
-		if (element->next) { \
-			element->next->prev = element->prev; \
-		} else { \
-			stack_bottom = element->prev; \
-		} \
-		if (element->prev) { \
-			element->prev->next = element->next; \
-		} else { \
-			stack = element; \
-		} \
-	} else { \
-		element = get_stack_element(self); \
-		waiting[pos_] = element; \
-	} \
-	SETUP_ELEM(row_, col_, value_, pos_) \
-	if (!stack) { \
-		stack_bottom = stack = element; \
-	} else if (value_ >= stack_bottom->value) { \
-		stack_bottom->next = element; \
-		element->prev = stack_bottom; \
-		stack_bottom = element; \
-	} else { \
-		element2 = stack_bottom; \
-		while (element2->prev && element2->prev->value > value_) element2=element2->prev; \
-		if (element2->prev) { \
-			element2->prev->next = element; \
-		} else { \
-			stack = element; \
-		} \
-		element->prev = element2->prev; \
-		element2->prev = element; \
-		element->next = element2; \
+	if (TAILQ_EMPTY(queue) || TAILQ_LAST(queue, _queue_d)->value <= value) {
+		TAILQ_INSERT_TAIL(queue, entry, hook);
+	} else if (TAILQ_FIRST(queue)->value > value) {
+		TAILQ_INSERT_HEAD(queue, entry, hook);
+	} else {
+		entry2 = TAILQ_LAST(queue, _queue_d);
+		TAILQ_FOREACH_REVERSE(entry3, queue, _queue_d, hook) {
+			if (entry3->value > value) {
+				entry2 = entry3;
+			} else {
+				break;
+			}
+		}
+		TAILQ_INSERT_BEFORE(entry2, entry, hook);
 	}
+}
+
+static inline void cleanup_d(queue_d *queue) {
+	if (TAILQ_EMPTY(queue)) return;
+	TAILQ_CONCAT(&free_entries_d, queue, hook);
+}
+
+static inline void cleanup_s(queue_s *queue) {
+	if (STAILQ_EMPTY(queue)) return;
+	STAILQ_CONCAT(&free_entries_s, queue);
+}
 
 #define DO_STUFF(row_, col_) \
 	if (!self->walls->values[pos] && self->map->values[pos] < 0) { \
-		PUT_NEW_ELEM(row_, col_, value, pos); \
+		put_entry_s(row_, col_, value, pos, &queue, self); \
 	}
 
 #define DO_STUFF_NEAR(row_, col_) \
@@ -367,14 +400,8 @@ static PyObject* cstuff_DirectionMap_set_walls(cstuff_DirectionMap* self, PyObje
 		value3 = value + g_near_map->values[pos]; \
 		value2 = self->map->values[pos]; \
 		if (value2 < 0 || value2 > value3) { \
-			PUT_NEW_ELEM_SORTED(row_, col_, value3, pos); \
+			put_entry_d_sorted(row_, col_, value3, pos, &queue, self, waiting); \
 		} \
-	}
-
-#define RESET_STACK \
-	if (stack) { \
-		stack_bottom->next = self->free_elements; \
-		self->free_elements = stack; \
 	}
 
 static PyObject* cstuff_DirectionMap_fill(cstuff_DirectionMap* self, PyObject *args) {
@@ -382,9 +409,8 @@ static PyObject* cstuff_DirectionMap_fill(cstuff_DirectionMap* self, PyObject *a
 	int row, col, row2, col2, stride, pos;
 	double value, limit;
 
-	stack_element *element, *stack, *stack_bottom;
-	stack = NULL;
-	stack_bottom = NULL;
+	queue_s queue = STAILQ_HEAD_INITIALIZER(queue);
+	entry_s *entry;
 
 	if (!PyArg_ParseTuple(args, "Od", &obj, &limit)) {
 		return NULL;
@@ -399,37 +425,35 @@ static PyObject* cstuff_DirectionMap_fill(cstuff_DirectionMap* self, PyObject *a
 		if (!PyArg_ParseTuple(item, "ii", &row, &col)) {
 			Py_DECREF(item);
 			Py_DECREF(iterator);
-			RESET_STACK;
+			cleanup_s(&queue);
 			return NULL;
 		}
 		if (row >= g_rows || col >= g_cols || row < 0 || col < 0) {
 			RAISE("Invalid input data - one of the targets is out od map bounds");
 			Py_DECREF(iterator);
-			RESET_STACK;
+			cleanup_s(&queue);
 			return NULL;
 		}
 		Py_DECREF(item);
-		PUT_NEW_ELEM(row, col, 0.0, row*g_cols+col);
+		put_entry_s(row, col, 0.0, row*g_cols+col, &queue, self);
 	}
 	Py_DECREF(iterator);
 
 	if (PyErr_Occurred()) {
-		RESET_STACK;
+		cleanup_s(&queue);
 		return NULL;
 	}
 
-	while (stack) {
-		element = stack;
-		stack = element->next;
-		if (!stack) stack_bottom = NULL;
-		row = element->row;
-		col = element->col;
-		value = element->value;
+	while (!STAILQ_EMPTY(&queue)) {
+		entry = STAILQ_FIRST(&queue);
+		STAILQ_REMOVE_HEAD(&queue, hook);
+		STAILQ_INSERT_TAIL(&free_entries_s, entry, hook);
+
+		row = entry->row;
+		col = entry->col;
+		value = entry->value;
 		stride = row*g_cols;
 		value += 1.0;
-
-		element->next = self->free_elements;
-		self->free_elements = element;
 
 		if ((limit > 0) && (value > limit)) continue;
 
@@ -450,7 +474,7 @@ static PyObject* cstuff_DirectionMap_fill(cstuff_DirectionMap* self, PyObject *a
 		DO_STUFF(row2, col);
 	}
 
-	RESET_STACK;
+	cleanup_s(&queue);
 	Py_RETURN_NONE;
 }
 
@@ -460,7 +484,8 @@ static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObje
 	double value, value2, value3, limit;
 	int with_value, parse_result;
 
-	stack_element *element, *element2, *stack, *stack_bottom, **waiting;
+	queue_d queue = TAILQ_HEAD_INITIALIZER(queue);
+	entry_d *entry, **waiting;
 
 	if (!PyArg_ParseTuple(args, "OdO", &obj, &limit, &with_value_obj)) {
 		return NULL;
@@ -472,14 +497,12 @@ static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObje
 		return NULL;
 	}
 
-	if (!(waiting = (stack_element**)malloc(g_rows*g_cols*sizeof(stack_element*)))) {
+	if (!(waiting = (entry_d**)malloc(g_rows*g_cols*sizeof(entry_d*)))) {
 		RAISE("Failed to allocate waiting nodes array");
 		return NULL;
 	}
-	memset(waiting, 0, g_rows*g_cols*sizeof(stack_element*));
+	memset(waiting, 0, g_rows*g_cols*sizeof(entry_d*));
 
-	stack = NULL;
-	stack_bottom = NULL;
 	value = 0.0;
 
 	while ((item = PyIter_Next(iterator))) {
@@ -491,47 +514,41 @@ static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObje
 		Py_DECREF(item);
 		if (!parse_result) {
 			Py_DECREF(iterator);
-			RESET_STACK;
+			cleanup_d(&queue);
 			free(waiting);
 			return NULL;
 		}
 		if (row >= g_rows || col >= g_cols || row < 0 || col < 0) {
 			RAISE("Invalid input data - one of the targets is out od map bounds");
 			Py_DECREF(iterator);
-			RESET_STACK;
+			cleanup_d(&queue);
 			free(waiting);
 			return NULL;
 		}
 		if (with_value) {
-			PUT_NEW_ELEM_SORTED(row, col, value, row*g_cols+col);
+			put_entry_d_sorted(row, col, value, row*g_cols+col, &queue, self, waiting);
 		} else {
-			PUT_NEW_ELEM_WAITING(row, col, 0.0, row*g_cols+col);
+			put_entry_d(row, col, 0.0, row*g_cols+col, &queue, self, waiting);
 		}
 	}
 	Py_DECREF(iterator);
 
 	if (PyErr_Occurred()) {
-		RESET_STACK;
+		cleanup_d(&queue);
 		free(waiting);
 		return NULL;
 	}
-	while (stack) {
-		element = stack;
-		stack = element->next;
-		if (stack) {
-			stack->prev = NULL;
-		} else {
-			stack_bottom = NULL;
-		}
-		row = element->row;
-		col = element->col;
-		value = element->value;
+	while (!TAILQ_EMPTY(&queue)) {
+		entry = TAILQ_FIRST(&queue);
+		TAILQ_REMOVE(&queue, entry, hook);
+		TAILQ_INSERT_TAIL(&free_entries_d, entry, hook);
+
+		row = entry->row;
+		col = entry->col;
+		value = entry->value;
 		stride = row*g_cols;
 		waiting[stride+col] = NULL;
 		value += 1.0;
-
-		element->next = self->free_elements;
-		self->free_elements = element;
 
 		if ((limit > 0) && (value > limit)) continue;
 
@@ -552,8 +569,8 @@ static PyObject* cstuff_DirectionMap_fill_near(cstuff_DirectionMap* self, PyObje
 		DO_STUFF_NEAR(row2, col)
 	}
 
+	cleanup_d(&queue);
 	free(waiting);
-	RESET_STACK;
 	Py_RETURN_NONE;
 }
 
