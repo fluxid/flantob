@@ -29,7 +29,7 @@ class Controller:
                 line = line.strip()
                 if not line:
                     continue
-                err(line)
+                #err(line)
                 args = RE_SP.split(line)
                 command = args.pop(0)
 

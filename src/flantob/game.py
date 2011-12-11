@@ -19,6 +19,12 @@ DIR_N2C = {
     3:'w',
 }
 
+def iterlen(iterable):
+    counter = 0
+    for _ in iterable:
+        counter += 1
+    return counter
+
 class Game:
     def __init__(self):
         self.loadtime = None
@@ -44,6 +50,7 @@ class Game:
 
         self.area = 1
         self.area_visible = 0
+        self.panic_range = 0
 
         self.turn = 0
         self.mx = 0
@@ -70,6 +77,8 @@ class Game:
         self.strategies = None
 
         self.start_time = None
+        self.last_max_solve_duration = 0
+        self.last_attack_consideration_duration = 0
 
     def init(self):
         random.seed(self.player_seed)
@@ -84,6 +93,8 @@ class Game:
         self.dmap_my_hills = cstuff.DirectionMap()
         self.dmap_enemy_hills = cstuff.DirectionMap()
         self.dmap_defence_panic = cstuff.DirectionMap()
+
+        self.panic_range = (self.rows + self.cols)*0.12
         
         mxf = math.sqrt(self.viewradius2)
         mx = self.mx = int(mxf)
@@ -160,7 +171,8 @@ class Game:
 
     def turn_begin(self, turn):
         self.turn = turn
-        err('turn', turn)
+        err()
+        err('- NEW TURN', turn)
 
     def time_remaining(self):
         return self.turntime - (time.time() - self.start_time)
@@ -236,25 +248,32 @@ class Game:
         self.dmap_enemy_hills.fill_near(self.enemy_hills, -1, False) 
 
         self.dmap_defence_panic.clear()
-        if self.enemy_ants:
-            attack_ants = [
-                (pos, distance)
-                for pos, distance in (
-                    (pos, self.dmap_my_hills.get_pos(pos))
-                    for pos in self.enemy_ants
-                )
-                if distance < 36
-            ]
-            if attack_ants:
-                min_distance = min(distance for _, distance in attack_ants)
-                self.dmap_defence_panic.set_walls(self.water_map.strides, -2)
-                self.dmap_defence_panic.fill_near((
-                    (row, col, (distance-min_distance)*1.2)
-                    for (row, col), distance in attack_ants
-                ), 50, True) 
-
 
         if self.my_hills:
+            if self.enemy_ants:
+                panic_range = min(min(
+                    self.dmap_enemy_hills.get_pos(pos)
+                    for pos in self.my_hills
+                )*0.3, self.panic_range)
+                panic_range2 = panic_range*0.5
+                attack_ants = [
+                    (pos, distance)
+                    for pos, distance in (
+                        (pos, self.dmap_my_hills.get_pos(pos))
+                        for pos in self.enemy_ants
+                    )
+                    if distance < panic_range
+                ]
+                #err('panic ranges:', panic_range, self.panic_range)
+                if attack_ants:
+                    min_distance = float(min(distance for _, distance in attack_ants))
+                    max_distance = max(max(distance for _, distance in attack_ants) - min_distance, 1)
+                    self.dmap_defence_panic.set_walls(self.water_map.strides, -2)
+                    self.dmap_defence_panic.fill_near((
+                        (row, col, ((distance-min_distance)/max_distance) * panic_range2)
+                        for (row, col), distance in attack_ants
+                    ), panic_range, True) 
+
             invisible = self.food - self.received_food
             for pos in invisible:
                 if pos in self.visible_map:
@@ -285,27 +304,45 @@ class Game:
 
             for target in self.food:
                 self.check_food(target)
+
         elif lost_all_my_hills:
-            err("I've just lost ALL MY HILLS")
+            for ant in self.my_ants.values():
+                ant.manager = random.choice(self.managers_attackers)[1]
 
         for ant in self.my_ants.values():
             ant.calculate_moves()
 
+        enemy_cache = dict()
+        if self.time_remaining() - self.last_attack_consideration_duration > 0.07:
+            ctime = time.time()
+            self.check_focus_attack(enemy_cache)
+            self.last_attack_consideration_duration = time.time()-ctime
+
         iterations = 0
         duration = 0
-        enemy_cache = dict()
-        self.occupied.clear()
+        ctime = 0
         while True:
+            self.occupied.clear()
+            for ant in self.my_ants.values():
+                ant.process_moves()
+            for ant in sorted(self.my_ants.values(), key=lambda x:x.max_confidence, reverse=True):
+                ant.reconsider_move()
+
+            if ctime:
+                duration = max(time.time()-ctime, duration)
             ctime = time.time()
+
+            if self.time_remaining() - (duration or self.last_max_solve_duration) < 0.03:
+                #err('Breaking after', iterations, 'iterations, with max solving time %.5f' % duration, 'because what is left is %.5f' % self.time_remaining())
+                break
+
+            iterations += 1
+            #err('iteration', iterations)
             if not self.solve_moves(enemy_cache):
                 #err('No more calculations to be made after', iterations, 'iterations')
                 break
-            duration = max(time.time()-ctime, duration)
-            if self.time_remaining() - duration < 0.01: # leave at least 10ms for response and moving ants
-                #err('Breaking after', iterations, 'iterations, with max solving time', duration, 'because what is left is', self.time_remaining())
-                break
-            iterations += 1
-            #err('iteration', iterations)
+        if duration:
+            self.last_max_solve_duration = duration
 
         new_ants = dict()
         for ant in self.my_ants.values():
@@ -331,9 +368,6 @@ class Game:
     def solve_moves(self, enemy_cache):
         changes_made = False
 
-        for ant in self.my_ants.values():
-            ant.consider_moves()
-
         new_ants = dict(
             (ant.considered_position, ant)
             for ant in self.my_ants.values()
@@ -344,9 +378,9 @@ class Game:
         offsets = ((-1, 0, 0), (0, -1, 0), (1, 0, 1), (2, 1, 0), (3, 0, -1)) 
 
         for apos, ant in new_ants.items():
-            ant.enemy_checks += 1
-            if ant.i_wont_move or ant.enemy_checks > 5:
+            if ant.i_wont_move:
                 continue
+
             arow, acol = apos
             apos2 = ant.row, ant.col
             all_enemy_ants_nearby = enemy_cache.get(apos)
@@ -358,8 +392,7 @@ class Game:
             #err(len(all_enemy_ants_nearby), 'enemies nearby ant', apos)
             all_my_ants_nearby = list(self.vector_ants(apos, ((pos, 0) for pos in new_ants), search_radius, True))
 
-            kills_enemy, kills_self = False, False
-            kills_count = 0
+            #err('I`m', apos2, 'and i want to move', ant.considered_direction)
             for enemy_direction, enemy_or, enemy_oc in offsets:
                 all_ants = [
                     x
@@ -382,7 +415,6 @@ class Game:
                 )
                 my_weakness = len(my_enemies)
                 dont_go = False
-                #err(my_weakness, 'possible enemies moving', enemy_direction, 'around ant', apos2, 'after moving to', apos, 'with minimal weakness', min_enemy_weakness)
                 #if min_enemy_weakness == my_weakness:
                 #    if enemy_direction == -1:
                 #        ant.considered_hold = True
@@ -392,12 +424,62 @@ class Game:
                     dont_go = True
 
                 if dont_go:
+                    #err(my_weakness, 'possible enemies moving', enemy_direction, 'around ant', apos2, 'after moving to', apos, 'with minimal weakness', min_enemy_weakness)
                     #err('I may be killed, not going', ant.considered_direction)
-                    ant.considered_moves_dict[ant.considered_direction] -= 5
+                    ant.considered_moves_dict[ant.considered_direction] -= 10
                     changes_made = True
                     break
 
         return changes_made
+
+    def check_focus_attack(self, enemy_cache):
+        search_radius = self.attackradius2 * 9
+        attack_radius = self.attackradius2
+        offsets = ((0, -1, 0), (1, 0, 1), (2, 1, 0), (3, 0, -1)) 
+
+        for apos, ant in self.my_ants.items():
+            arow, acol = apos
+            all_enemy_ants_nearby = enemy_cache.get(apos)
+            if all_enemy_ants_nearby is None:
+                all_enemy_ants_nearby = list(self.vector_ants(apos, self.enemy_ants.items(), search_radius, True))
+                enemy_cache[apos] = all_enemy_ants_nearby
+            if not all_enemy_ants_nearby:
+                continue
+            #err(len(all_enemy_ants_nearby), 'enemies nearby ant', apos)
+            all_my_ants_nearby = list(self.vector_ants(apos, ((pos, 0) for pos in self.my_ants), search_radius, True))
+
+            for my_direction, my_or, my_oc in offsets:
+                kills_enemy, kills_self = False, False
+                kills_count = 0
+                for enemy_direction, enemy_or, enemy_oc in offsets:
+                    enemy_or -= my_or
+                    enemy_oc -= my_oc
+
+                    all_ants = [
+                        x
+                        for y in (
+                            (
+                                ((row+enemy_or, col+enemy_oc), owner)
+                                for (row, col), owner in all_enemy_ants_nearby
+                            ),
+                            all_my_ants_nearby,
+                        )
+                        for x in y
+                    ]
+                    #err(apos, ant.considered_direction, enemy_direction, enemy_or, enemy_oc, all_ants)
+                    my_enemies = list(self.vector_ants((0, 0), all_ants, attack_radius, True, 0))
+                    if not my_enemies:
+                        continue
+                    my_weakness = len(my_enemies)
+                    kills_count += sum(
+                        1
+                        for enemy_pos, fraction in my_enemies
+                        if iterlen(self.vector_ants(enemy_pos, all_ants, attack_radius, False, fraction)) > my_weakness
+                    )
+
+                if kills_count:
+                    #err(apos, '→ I have', kills_count, 'potential kills when going', my_direction)
+                    ant.considered_moves_dict[my_direction] += kills_count*1.25
 
     def set_water(self, row, col):
         self.water_map.set(row, col)

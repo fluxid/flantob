@@ -226,14 +226,13 @@ class Ant:
         self.considered_direction = None
         self.considered_position = None
         self.confidence = None
-        self.enemy_checks = 0
+        self.max_confidence = 0
 
     def calculate_moves(self):
-        self.enemy_checks = 0
         self.considered_hold = False
         self.considered_moves_dict = self.manager.get_moves(self)
 
-    def consider_moves(self):
+    def process_moves(self):
         self.i_wont_move = False
         self.next_consideration = 0
 
@@ -253,7 +252,7 @@ class Ant:
                 key = lambda x: x[1],
                 reverse = True,
             ))
-        self.reconsider_move()
+        self.max_confidence = self.considered_moves[0][1]
 
     def reconsider_move(self):
         while True:
